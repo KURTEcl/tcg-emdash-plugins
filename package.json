@@ -1,0 +1,9 @@
+{
+  "name": "tcg-emdash-plugins",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --recursive build",
+    "typecheck": "pnpm --recursive typecheck"
+  },
+  "packageManager": "pnpm@11.9.0"
+}
