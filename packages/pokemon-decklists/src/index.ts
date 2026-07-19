@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
@@ -15,6 +15,7 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 			archetypes: { indexes: ["name", "updatedAt"] },
 			decks: { indexes: ["archetypeId", "format", "createdAt"] },
 			matches: { indexes: ["deckId", "playedAt", "result", "visibility"] },
+			tournaments: { indexes: ["deckId", "playedAt", "visibility", "createdAt"] },
 		},
 		adminPages: [
 			{ path: "/decks", label: "Decklists Pokémon", icon: "list" },

@@ -78,9 +78,9 @@ const spriteUrl = spriteId ? `https://cdn.tcghub.cl/sprites/sprites/pokemon/${sp
 
 		{node.showResults && stats.total > 0 && (
 			<section class="tcg-results">
-				<div class="tcg-results__summary"><strong>{stats.winRate}%</strong><span>win rate · {stats.total} partidas</span></div>
+				<div class="tcg-results__summary"><strong>{stats.winRate}%</strong><span>win rate · {stats.total} rondas</span></div>
 				<div class="tcg-results__numbers"><span>{stats.wins} V</span><span>{stats.losses} D</span><span>{stats.draws} E</span></div>
-				<ul>{matches.slice(0, 8).map((match) => <li><span>{match.playedAt}{match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}</span><strong class={`is-${match.result}`}>{match.result === "win" ? "Victoria" : match.result === "loss" ? "Derrota" : "Empate"}</strong></li>)}</ul>
+				<ul>{matches.slice(0, 8).map((match) => <li><span>{match.playedAt}{match.eventName ? ` · ${match.eventName}` : ""}{match.round ? ` · R${match.round}` : ""}{match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}</span><strong class={`is-${match.result}`}>{match.result === "win" ? "Victoria" : match.result === "loss" ? "Derrota" : "Empate"}</strong></li>)}</ul>
 			</section>
 		)}
 	</section>

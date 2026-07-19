@@ -54,11 +54,15 @@ export interface Decklist {
 
 export interface MatchResult {
 	id: string;
+	tournamentId?: string;
 	deckId: string;
 	deckRevisionId: string;
 	playedAt: string;
 	opponentArchetype?: string;
+	opponentPokemon?: ArchetypePokemon[];
 	result: "win" | "loss" | "draw";
+	games?: Array<{ result: "win" | "loss" | "draw"; wentFirst?: boolean }>;
+	specialOutcome?: "bye" | "no-show" | "intentional-draw";
 	gamesWon?: number;
 	gamesLost?: number;
 	gamesDrawn?: number;
@@ -67,6 +71,19 @@ export interface MatchResult {
 	round?: number;
 	notes?: string;
 	visibility: "public" | "private";
+}
+
+export interface TournamentResult {
+	id: string;
+	deckId: string;
+	deckRevisionId: string;
+	name: string;
+	playedAt: string;
+	placement?: string;
+	notes?: string;
+	visibility: "public" | "private";
+	createdAt: string;
+	updatedAt: string;
 }
 
 export interface ParsedDeck {

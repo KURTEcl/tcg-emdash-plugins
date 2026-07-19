@@ -10,7 +10,8 @@ Plugin de EmDash para importar listas de Pokémon TCG desde PTCG Live o Limitles
 - Catálogo reutilizable de arquetipos seleccionables desde cada decklist.
 - Selector con buscador de PokéAPI para especies normales y formas Mega; los IDs se guardan internamente.
 - URL base de sprites configurable, con `https://cdn.tcghub.cl/sprites/sprites` como valor inicial.
-- Almacenamiento preparado para decklists y resultados de partidas.
+- Registro de torneos con fecha, decklist, posición, visibilidad y notas.
+- Rondas editables con arquetipo rival seleccionable desde PokéAPI, hasta tres partidas y orden de inicio.
+- Casos especiales de torneo: BYE, rival ausente y empate intencional.
+- Estadísticas públicas calculadas por ronda, manteniendo compatibilidad con resultados anteriores.
 - API pública para consultar listas y obtener su representación de texto.
-
-El registro y las estadísticas de resultados se incorporarán sobre la colección `matches` en la siguiente iteración.
