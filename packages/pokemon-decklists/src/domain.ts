@@ -20,9 +20,21 @@ export interface DeckCard {
 
 export interface ArchetypePokemon {
 	speciesId: number;
+	/** PokeAPI sprite ID. Differs from speciesId for forms such as Mega Evolutions. */
+	spriteId: number;
 	name: string;
+	form?: string;
 	role: "primary" | "secondary" | "engine" | "support";
 	order: number;
+}
+
+export interface Archetype {
+	id: string;
+	name: string;
+	game: "pokemon";
+	pokemon: ArchetypePokemon[];
+	createdAt: string;
+	updatedAt: string;
 }
 
 export interface Decklist {

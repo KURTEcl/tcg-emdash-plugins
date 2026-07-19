@@ -7,8 +7,9 @@ Plugin de EmDash para importar listas de Pokémon TCG desde PTCG Live o Limitles
 - Parser de listas en inglés y español.
 - Conserva la impresión importada y una impresión básica para mostrar/copiar.
 - Resolución de impresiones equivalentes mediante TCGDex, sin precios.
-- Arquetipos con uno o dos Pokémon desde el formulario inicial.
-- URL base de sprites configurable, con `https://cdn.tcghub.cl` como valor inicial.
+- Catálogo reutilizable de arquetipos seleccionables desde cada decklist.
+- Pokémon normales y formas Mega mediante IDs de especie y sprite separados.
+- URL base de sprites configurable, con `https://cdn.tcghub.cl/sprites/sprites` como valor inicial.
 - Almacenamiento preparado para decklists y resultados de partidas.
 - API pública para consultar listas y obtener su representación de texto.
 
