@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@emdash-cms/admin";
 import { BlockRenderer } from "@emdash-cms/blocks";
 import type { Block, BlockInteraction } from "@emdash-cms/blocks";
+import { ArrowsClockwise } from "@phosphor-icons/react/ArrowsClockwise";
 import { Copy } from "@phosphor-icons/react/Copy";
 import { MagnifyingGlass } from "@phosphor-icons/react/MagnifyingGlass";
 import { PencilSimple } from "@phosphor-icons/react/PencilSimple";
 import { Plus } from "@phosphor-icons/react/Plus";
 import { Trash } from "@phosphor-icons/react/Trash";
-import type { Archetype, Decklist, MatchResult, TournamentResult } from "./domain.js";
+import type { Archetype, CardCategory, DeckCard, Decklist, MatchResult, TournamentResult } from "./domain.js";
 
 const API = "/_emdash/api/plugins/pokemon-decklists";
 type AdminData = { decks: Decklist[]; archetypes: Archetype[]; tournaments: TournamentResult[]; matches: MatchResult[] };
@@ -133,12 +134,179 @@ function Editor({ blocks, notice, onAction, onBack }: { blocks: Block[]; notice:
 	return <div><button type="button" onClick={onBack} className="mb-4 text-sm text-kumo-subtle hover:text-kumo-default">← Volver al listado</button><NoticeBanner notice={notice} /><BlockRenderer blocks={blocks} onAction={onAction} /></div>;
 }
 
+type EditorCard = { key: string; quantity: number; category: CardCategory; name: string; setCode?: string; collectorNumber?: string; id?: string; imageUrl?: string };
+
+function mapTcgCategory(category?: string): CardCategory {
+	const value = (category ?? "").toLowerCase();
+	if (value.includes("energy") || value.includes("energ")) return "energy";
+	if (value.includes("pokemon") || value.includes("pokémon")) return "pokemon";
+	return "trainer";
+}
+
+function cardsFromDeck(deck?: Decklist | null): EditorCard[] {
+	return (deck?.cards ?? []).map((card, index) => ({
+		key: `${printingKey(card)}-${index}`,
+		quantity: card.quantity,
+		category: card.category,
+		name: card.importedPrinting.name || card.displayPrinting.name,
+		setCode: card.importedPrinting.setCode ?? card.displayPrinting.setCode,
+		collectorNumber: card.importedPrinting.collectorNumber ?? card.displayPrinting.collectorNumber,
+		id: card.displayPrinting.id ?? card.importedPrinting.id,
+		imageUrl: card.displayPrinting.imageUrl,
+	}));
+}
+
+function printingKey(card: DeckCard) {
+	const printing = card.importedPrinting;
+	return [printing.name.trim().toLowerCase(), printing.setCode?.trim().toUpperCase() ?? "", printing.collectorNumber?.trim().replace(/^0+/, "") ?? ""].join("|");
+}
+
+function DeckEditor({ deck, archetypes, onBack, onSaved, reload }: { deck?: Decklist; archetypes: Archetype[]; onBack: () => void; onSaved: (message: string) => void; reload: () => Promise<void> }) {
+	const [name, setName] = useState(deck?.name ?? "");
+	const [archetypeId, setArchetypeId] = useState(deck?.archetypeId ?? archetypes[0]?.id ?? "");
+	const [format, setFormat] = useState<Decklist["format"]>(deck?.format ?? "standard");
+	const [isArchetypeBase, setIsArchetypeBase] = useState(Boolean(deck?.isArchetypeBase));
+	const [cards, setCards] = useState<EditorCard[]>(() => cardsFromDeck(deck));
+	const [deckText, setDeckText] = useState("");
+	const [query, setQuery] = useState("");
+	const [hits, setHits] = useState<PickerCard[]>([]);
+	const [status, setStatus] = useState("");
+	const [saving, setSaving] = useState(false);
+	const [searching, setSearching] = useState(false);
+	const [notice, setNotice] = useState<Notice>(null);
+
+	const total = cards.reduce((sum, card) => sum + card.quantity, 0);
+
+	const runSearch = async () => {
+		const q = query.trim();
+		if (q.length < 2) { setStatus("Escribe al menos dos caracteres."); return; }
+		setSearching(true); setStatus("Buscando…");
+		try {
+			const result = await request<{ items: PickerCard[] }>(`card-picker-search?q=${encodeURIComponent(q)}`);
+			setHits(result.items); setStatus(result.items.length ? "Haz clic para agregar una carta." : "Sin resultados.");
+		} catch { setStatus("No se pudo consultar TCGDex."); }
+		finally { setSearching(false); }
+	};
+
+	const addCard = async (hit: PickerCard) => {
+		try {
+			const detail = await request<{ status: string; selected?: { id: string; name: string; localId: string | number; image?: string; category?: string; set?: { id: string } } }>(`cards/display?id=${encodeURIComponent(hit.id)}`);
+			const selected = detail.selected;
+			const nameValue = selected?.name ?? hit.name;
+			const collectorNumber = selected ? String(selected.localId) : hit.number;
+			const imageUrl = selected?.image ? `${selected.image}/high.webp` : hit.imageUrl;
+			const category = mapTcgCategory(selected?.category);
+			setCards((current) => {
+				const match = current.find((card) => card.id === hit.id || (card.name === nameValue && card.collectorNumber === collectorNumber));
+				if (match) return current.map((card) => card.key === match.key ? { ...card, quantity: Math.min(60, card.quantity + 1) } : card);
+				return [...current, { key: `${hit.id}-${Date.now()}`, quantity: 1, category, name: nameValue, collectorNumber, id: hit.id, imageUrl, setCode: undefined }];
+			});
+			setStatus(`Agregada: ${nameValue}`);
+		} catch { setStatus("No se pudo agregar la carta."); }
+	};
+
+	const save = async (reanalyze = false) => {
+		if (!archetypeId) { setNotice({ type: "error", message: "Selecciona un arquetipo" }); return; }
+		if (!cards.length && !deckText.trim()) { setNotice({ type: "error", message: "Agrega cartas o pega una lista exportada" }); return; }
+		setSaving(true); setNotice(null);
+		try {
+			const result = await request<{ ok: boolean; error?: string; message?: string; deck?: Decklist }>("decks/save", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					id: deck?.id,
+					name: name.trim() || archetypes.find((item) => item.id === archetypeId)?.name || "Decklist",
+					archetypeId,
+					format,
+					isArchetypeBase,
+					reanalyze,
+					cards: cards.map((card) => ({ quantity: card.quantity, category: card.category, name: card.name, setCode: card.setCode, collectorNumber: card.collectorNumber, id: card.id, imageUrl: card.imageUrl })),
+					deckText: cards.length ? undefined : deckText,
+				}),
+			});
+			if (!result.ok) { setNotice({ type: "error", message: result.error || "No se pudo guardar" }); return; }
+			await reload();
+			onSaved(result.message || "Decklist guardado");
+		} catch (cause) { setNotice({ type: "error", message: cause instanceof Error ? cause.message : "No se pudo guardar" }); }
+		finally { setSaving(false); }
+	};
+
+	return <div className="space-y-5">
+		<button type="button" onClick={onBack} className="text-sm text-kumo-subtle hover:text-kumo-default">← Volver al listado</button>
+		<div><h1 className="text-2xl font-semibold">{deck ? `Editar: ${deck.name}` : "Nueva decklist"}</h1><p className="mt-1 text-sm text-kumo-subtle">Busca y quita cartas, o pega una lista exportada. Marca “lista base” si es la referencia del arquetipo.</p></div>
+		<NoticeBanner notice={notice} />
+		<div className="grid gap-4 md:grid-cols-2">
+			<label className="block text-sm"><span className="mb-1 block font-medium">Nombre</span><input value={name} onChange={(e) => setName(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3" /></label>
+			<label className="block text-sm"><span className="mb-1 block font-medium">Arquetipo</span><select value={archetypeId} onChange={(e) => setArchetypeId(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3">{archetypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+			<label className="block text-sm"><span className="mb-1 block font-medium">Formato</span><select value={format} onChange={(e) => setFormat(e.target.value as Decklist["format"])} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3"><option value="standard">Standard</option><option value="expanded">Expanded</option><option value="glc">GLC</option><option value="custom">Personalizado</option></select></label>
+			<label className="flex items-start gap-3 rounded-md border border-kumo-line bg-kumo-elevated p-3 text-sm"><input type="checkbox" checked={isArchetypeBase} onChange={(e) => setIsArchetypeBase(e.target.checked)} className="mt-0.5" /><span><strong className="block">Lista base del arquetipo</strong><span className="text-kumo-subtle">No aparece en /decklists ni en la tabla del arquetipo. Solo una base por arquetipo.</span></span></label>
+		</div>
+
+		<section className="rounded-lg border border-kumo-line bg-kumo-elevated p-4">
+			<div className="mb-3 flex items-center justify-between gap-3"><h2 className="font-semibold">Cartas ({total})</h2><span className="text-xs text-kumo-subtle">Busca para agregar · ajusta cantidad o quita</span></div>
+			<div className="mb-3 flex gap-2"><input type="search" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void runSearch(); } }} placeholder="Zoroark, Rare Candy…" className="h-9 min-w-0 flex-1 rounded-md border border-kumo-line bg-transparent px-3 text-sm" /><button type="button" disabled={searching} onClick={() => void runSearch()} className="h-9 rounded-md bg-kumo-accent px-3 text-sm font-medium text-white">{searching ? "…" : "Buscar"}</button></div>
+			{status && <p className="mb-3 text-xs text-kumo-subtle">{status}</p>}
+			{!!hits.length && <div className="mb-4 grid grid-cols-3 gap-2 sm:grid-cols-5">{hits.map((hit) => <button key={hit.id} type="button" onClick={() => void addCard(hit)} className="rounded-md border border-kumo-line p-1 text-left hover:border-kumo-accent"><img src={hit.imageUrl} alt="" className="aspect-[245/342] w-full rounded object-cover" /><span className="mt-1 block truncate text-[11px]">{hit.name}</span></button>)}</div>}
+			{!cards.length ? <p className="text-sm text-kumo-subtle">Todavía no hay cartas. Busca arriba o pega una lista abajo.</p> : <ul className="divide-y divide-kumo-line">{cards.map((card) => <li key={card.key} className="flex items-center gap-3 py-2"><div className="size-10 shrink-0 overflow-hidden rounded bg-kumo-tint">{card.imageUrl ? <img src={card.imageUrl.replace("/high.webp", "/low.webp")} alt="" className="size-full object-cover" /> : null}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{card.name}</p><p className="text-xs text-kumo-subtle">{card.category}{card.collectorNumber ? ` · ${card.collectorNumber}` : ""}</p></div><div className="flex items-center gap-1"><button type="button" className="size-7 rounded border border-kumo-line" onClick={() => setCards((current) => current.map((item) => item.key === card.key ? { ...item, quantity: Math.max(1, item.quantity - 1) } : item))}>-</button><span className="w-6 text-center text-sm">{card.quantity}</span><button type="button" className="size-7 rounded border border-kumo-line" onClick={() => setCards((current) => current.map((item) => item.key === card.key ? { ...item, quantity: Math.min(60, item.quantity + 1) } : item))}>+</button></div><button type="button" className="text-xs text-kumo-danger" onClick={() => setCards((current) => current.filter((item) => item.key !== card.key))}>Quitar</button></li>)}</ul>}
+		</section>
+
+		<details className="rounded-lg border border-kumo-line bg-kumo-elevated p-4"><summary className="cursor-pointer text-sm font-medium">Pegar lista exportada (opcional)</summary><p className="mt-2 text-xs text-kumo-subtle">Si hay cartas en la lista de arriba, se ignorará este texto al guardar. Úsalo para importar desde PTCGL/Limitless cuando la lista esté vacía.</p><textarea value={deckText} onChange={(e) => setDeckText(e.target.value)} rows={8} className="mt-3 w-full rounded-md border border-kumo-line bg-transparent p-3 font-mono text-xs" placeholder={"Pokémon: 1\n1 Zoroark PFL 83\n…"} /></details>
+
+		<div className="flex flex-wrap gap-2">
+			<button type="button" disabled={saving} onClick={() => void save(false)} className="h-9 rounded-md bg-kumo-accent px-4 text-sm font-medium text-white disabled:opacity-60">{saving ? "Guardando…" : "Guardar"}</button>
+			{deck && <button type="button" disabled={saving} onClick={() => void save(true)} className="h-9 rounded-md border border-kumo-line px-4 text-sm">Guardar y reanalizar imágenes</button>}
+		</div>
+	</div>;
+}
+
 function DecksPage() {
-	const { data, error, reload } = useAdminData(); const editor = useEditor(reload); const [search, setSearch] = useState(""); const [format, setFormat] = useState("all");
+	const { data, error, reload } = useAdminData();
+	const editor = useEditor(reload);
+	const [search, setSearch] = useState("");
+	const [format, setFormat] = useState("all");
+	const [editing, setEditing] = useState<string | "new" | null>(null);
+	const [listNotice, setListNotice] = useState<Notice>(null);
 	const decks = useMemo(() => (data?.decks ?? []).filter((deck) => `${deck.name} ${deck.archetypeName}`.toLowerCase().includes(search.toLowerCase()) && (format === "all" || deck.format === format)), [data, search, format]);
+	const editingDeck = editing && editing !== "new" ? data?.decks.find((deck) => deck.id === editing) : undefined;
+
+	if (editing !== null && data) {
+		return <DeckEditor
+			deck={editing === "new" ? undefined : editingDeck}
+			archetypes={data.archetypes}
+			reload={reload}
+			onBack={() => { setEditing(null); void reload(); }}
+			onSaved={(message) => { setEditing(null); setListNotice({ type: "success", message }); void reload(); }}
+		/>;
+	}
+
 	if (editor.blocks) return <Editor blocks={editor.blocks} notice={editor.notice} onBack={() => { editor.setBlocks(null); void reload(); }} onAction={(interaction) => void editor.interact(interaction, interaction.type === "form_submit")} />;
 	if (!data) return <Loading error={error} />;
-	return <div><PageHeader title="Decklists" description="Administra las listas importadas desde Pokémon TCG Live o Limitless." action={() => void editor.open("new_deck")} actionLabel="Agregar nueva" /><NoticeBanner notice={editor.notice} /><Toolbar search={search} setSearch={setSearch} placeholder="Buscar decklists"><Filter value={format} onChange={setFormat} label="Filtrar por formato" options={[{ value: "all", label: "Todos los formatos" }, { value: "standard", label: "Standard" }, { value: "expanded", label: "Expanded" }, { value: "glc", label: "GLC" }, { value: "custom", label: "Personalizado" }]} /></Toolbar><AdminTable columns={["Nombre", "Arquetipo", "Formato", "Cartas", "Imágenes", "Actualizado", "Acciones"]} empty={!decks.length}>{decks.map((deck) => <tr key={deck.id} className="border-b border-kumo-line last:border-0"><td className="px-4 py-3 font-medium text-kumo-default">{deck.name}</td><td className="px-4 py-3 text-kumo-subtle">{deck.archetypeName}</td><td className="px-4 py-3"><span className="rounded-full bg-kumo-tint px-2 py-1 text-xs">{deck.format}</span></td><td className="px-4 py-3">{deck.totalCards}</td><td className="px-4 py-3 text-kumo-subtle">{deck.cards.some((card) => !card.displayPrinting.imageUrl) ? "Pendientes" : "Listas"}</td><td className="whitespace-nowrap px-4 py-3 text-kumo-subtle">{new Date(deck.updatedAt).toLocaleDateString()}</td><td className="px-4 py-3"><RowActions label={deck.name} onEdit={() => void editor.open("edit_deck", deck.id)} onDuplicate={() => void editor.action("duplicate_deck", deck.id)} onDelete={() => { if (confirm(`¿Eliminar ${deck.name}?`)) void editor.action("delete_deck", deck.id); }} /></td></tr>)}</AdminTable></div>;
+
+	return <div>
+		<PageHeader title="Decklists" description="Administra las listas importadas desde Pokémon TCG Live o Limitless." action={() => setEditing("new")} actionLabel="Agregar nueva" />
+		<NoticeBanner notice={listNotice ?? editor.notice} />
+		<Toolbar search={search} setSearch={setSearch} placeholder="Buscar decklists">
+			<Filter value={format} onChange={setFormat} label="Filtrar por formato" options={[{ value: "all", label: "Todos los formatos" }, { value: "standard", label: "Standard" }, { value: "expanded", label: "Expanded" }, { value: "glc", label: "GLC" }, { value: "custom", label: "Personalizado" }]} />
+		</Toolbar>
+		<AdminTable columns={["Nombre", "Arquetipo", "Base", "Formato", "Cartas", "Imágenes", "Actualizado", "Acciones"]} empty={!decks.length}>
+			{decks.map((deck) => <tr key={deck.id} className="border-b border-kumo-line last:border-0">
+				<td className="px-4 py-3 font-medium text-kumo-default">{deck.name}</td>
+				<td className="px-4 py-3 text-kumo-subtle">{deck.archetypeName}</td>
+				<td className="px-4 py-3 text-kumo-subtle">{deck.isArchetypeBase ? "Sí" : "—"}</td>
+				<td className="px-4 py-3"><span className="rounded-full bg-kumo-tint px-2 py-1 text-xs">{deck.format}</span></td>
+				<td className="px-4 py-3">{deck.totalCards}</td>
+				<td className="px-4 py-3 text-kumo-subtle">{deck.cards.some((card) => !card.displayPrinting.imageUrl) ? "Pendientes" : "Listas"}</td>
+				<td className="whitespace-nowrap px-4 py-3 text-kumo-subtle">{new Date(deck.updatedAt).toLocaleDateString()}</td>
+				<td className="px-4 py-3"><RowActions
+					label={deck.name}
+					onEdit={() => setEditing(deck.id)}
+					onDuplicate={() => void editor.action("duplicate_deck", deck.id)}
+					onDelete={() => { if (confirm(`¿Eliminar ${deck.name}?`)) void editor.action("delete_deck", deck.id); }}
+					extra={<IconButton label={`Reanalizar imágenes de ${deck.name}`} onClick={() => void editor.action("reanalyze_deck", deck.id)}><ArrowsClockwise size={17} /></IconButton>}
+				/></td>
+			</tr>)}
+		</AdminTable>
+	</div>;
 }
 
 function ArchetypesPage() {

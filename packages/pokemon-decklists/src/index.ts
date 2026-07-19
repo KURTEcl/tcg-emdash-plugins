@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
@@ -39,7 +39,7 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 			type: "pokemonArchetypeDecklists",
 			label: "Decklists del arquetipo",
 			icon: "list",
-			description: "Tabla con todas las listas creadas para un arquetipo.",
+			description: "Tabla con las listas del arquetipo (excluye la lista base).",
 			category: "TCG",
 			fields: [
 				{ type: "select", action_id: "archetypeId", label: "Arquetipo", options: [], optionsRoute: "archetype-options" },

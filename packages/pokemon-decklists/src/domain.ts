@@ -46,10 +46,17 @@ export interface Decklist {
 	format: "standard" | "expanded" | "glc" | "custom";
 	language: string;
 	source: "ptcgl" | "limitless" | "manual";
+	/** Lista de referencia del arquetipo: no sale en catálogo ni en la tabla del arquetipo. */
+	isArchetypeBase?: boolean;
 	cards: DeckCard[];
 	totalCards: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** Listas visibles en catálogo público y tablas de arquetipo. */
+export function isCatalogDecklist(deck: Pick<Decklist, "isArchetypeBase">) {
+	return !deck.isArchetypeBase;
 }
 
 export interface MatchResult {

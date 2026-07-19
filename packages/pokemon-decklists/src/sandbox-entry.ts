@@ -1,13 +1,14 @@
 import { definePlugin } from "emdash";
 import type { PluginContext } from "emdash";
-import type { Archetype, ArchetypePokemon, DeckCard, Decklist, MatchResult, TournamentResult } from "./domain.js";
+import type { Archetype, ArchetypePokemon, CardCategory, DeckCard, Decklist, MatchResult, TournamentResult } from "./domain.js";
+import { isCatalogDecklist } from "./domain.js";
 import { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
 import { getArchetypePokemon, listPokemonOptions, type PokemonOption } from "./pokeapi.js";
 import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
 import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 const tournamentCategories = [
 	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
 	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
@@ -89,8 +90,17 @@ export default definePlugin({
 				if (id) return await ctx.storage.decks!.get(id);
 				const result = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 100 });
 				const archetypeId = url.searchParams.get("archetypeId");
-				const items = result.items.map((item) => item.data as Decklist).filter((deck) => !archetypeId || deck.archetypeId === archetypeId);
+				const includeBase = url.searchParams.get("includeBase") === "1";
+				const items = result.items
+					.map((item) => item.data as Decklist)
+					.filter((deck) => (!archetypeId || deck.archetypeId === archetypeId) && (includeBase || isCatalogDecklist(deck)));
 				return { items, cursor: result.cursor, hasMore: result.hasMore };
+			},
+		},
+		"decks/save": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
+				return saveDeckFromEditor(values, ctx);
 			},
 		},
 		tournaments: {
@@ -201,12 +211,13 @@ async function handleAction(interaction: Interaction, ctx: PluginContext) {
 		await ctx.storage.decks!.delete(id);
 		return renderAdmin(ctx, { message: "Decklist eliminado" });
 	}
-	if (interaction.action_id === "normalize_deck") {
+	if (interaction.action_id === "normalize_deck" || interaction.action_id === "reanalyze_deck") {
 		const deck = await ctx.storage.decks!.get(id) as Decklist | null;
 		if (!deck) return renderAdmin(ctx, { error: "No se encontró el decklist" });
-		const normalized = await normalizeDeck(deck, ctx);
+		const force = interaction.action_id === "reanalyze_deck";
+		const normalized = await normalizeDeck(deck, ctx, force);
 		await ctx.storage.decks!.put(id, normalized.deck);
-		return renderAdmin(ctx, { message: `${normalized.resolved} cartas visuales normalizadas; ${normalized.unresolved} pendientes` });
+		return renderAdmin(ctx, { message: `${normalized.resolved} cartas visuales ${force ? "reanalizadas" : "normalizadas"}; ${normalized.unresolved} pendientes` });
 	}
 	if (interaction.action_id === "delete_result") {
 		await ctx.storage.matches!.delete(id);
@@ -256,10 +267,58 @@ async function saveDeck(action: string, values: Record<string, unknown>, ctx: Pl
 	const archetypePokemon = [archetype.pokemon[0], selectedSecondary ?? existing?.archetypePokemon?.[1] ?? archetype.pokemon[1]].filter((pokemon): pokemon is ArchetypePokemon => Boolean(pokemon));
 	const now = new Date().toISOString();
 	const id = existing?.id ?? crypto.randomUUID();
-	const deck: Decklist = { id, name: String(values.name ?? archetype.name).trim() || "Decklist", archetypeId: archetype.id, archetypeName: archetype.name, archetypePokemon, format: asFormat(values.format), language: existing?.language ?? "en", source: existing?.source ?? "ptcgl", cards: reuseResolvedCards(parsed.cards, existing?.cards), totalCards: parsed.totalCards, createdAt: existing?.createdAt ?? now, updatedAt: now };
+	const isArchetypeBase = asBool(values.isArchetypeBase);
+	const deck: Decklist = { id, name: String(values.name ?? archetype.name).trim() || "Decklist", archetypeId: archetype.id, archetypeName: archetype.name, archetypePokemon, format: asFormat(values.format), language: existing?.language ?? "en", source: existing?.source ?? "ptcgl", isArchetypeBase, cards: reuseResolvedCards(parsed.cards, existing?.cards), totalCards: parsed.totalCards, createdAt: existing?.createdAt ?? now, updatedAt: now };
 	const normalized = await normalizeDeck(deck, ctx);
+	await clearOtherArchetypeBases(ctx, id, archetype.id, isArchetypeBase);
 	await ctx.storage.decks!.put(id, normalized.deck);
-	return renderAdmin(ctx, { message: `${existing ? "Decklist actualizado" : "Lista guardada"} con ${deck.totalCards} cartas · ${normalized.resolved} imágenes listas${normalized.unresolved ? ` · ${normalized.unresolved} pendientes` : ""}` });
+	return renderAdmin(ctx, { message: `${existing ? "Decklist actualizado" : "Lista guardada"} con ${deck.totalCards} cartas · ${normalized.resolved} imágenes listas${normalized.unresolved ? ` · ${normalized.unresolved} pendientes` : ""}${isArchetypeBase ? " · lista base" : ""}` });
+}
+
+async function saveDeckFromEditor(values: Record<string, unknown>, ctx: PluginContext) {
+	const archetype = await ctx.storage.archetypes!.get(String(values.archetypeId ?? "")) as Archetype | null;
+	if (!archetype) return { ok: false, error: "Selecciona un arquetipo existente" };
+	const existingId = optional(values.id);
+	const existing = existingId ? await ctx.storage.decks!.get(existingId) as Decklist | null : null;
+	let cards: DeckCard[];
+	if (Array.isArray(values.cards) && values.cards.length) {
+		cards = values.cards.map((item) => asEditorCard(item)).filter((card): card is DeckCard => Boolean(card));
+	} else {
+		const parsed = parsePokemonDecklist(String(values.deckText ?? ""));
+		if (!parsed.cards.length || parsed.errors.length) return { ok: false, error: parsed.errors[0]?.message ?? "La lista está vacía" };
+		cards = reuseResolvedCards(parsed.cards, existing?.cards);
+	}
+	if (!cards.length) return { ok: false, error: "La lista está vacía" };
+	const selectedSecondary = optional(values.secondaryPokemon)
+		? await getArchetypePokemon((url, init) => ctx.http!.fetch(String(url), init), String(values.secondaryPokemon), "secondary", 1)
+		: null;
+	const archetypePokemon = [archetype.pokemon[0], selectedSecondary ?? existing?.archetypePokemon?.[1] ?? archetype.pokemon[1]].filter((pokemon): pokemon is ArchetypePokemon => Boolean(pokemon));
+	const now = new Date().toISOString();
+	const id = existing?.id ?? crypto.randomUUID();
+	const isArchetypeBase = asBool(values.isArchetypeBase);
+	const deck: Decklist = {
+		id,
+		name: String(values.name ?? archetype.name).trim() || "Decklist",
+		archetypeId: archetype.id,
+		archetypeName: archetype.name,
+		archetypePokemon,
+		format: asFormat(values.format),
+		language: existing?.language ?? "en",
+		source: existing?.source ?? (Array.isArray(values.cards) ? "manual" : "ptcgl"),
+		isArchetypeBase,
+		cards,
+		totalCards: cards.reduce((sum, card) => sum + card.quantity, 0),
+		createdAt: existing?.createdAt ?? now,
+		updatedAt: now,
+	};
+	const normalized = await normalizeDeck(deck, ctx, asBool(values.reanalyze));
+	await clearOtherArchetypeBases(ctx, id, archetype.id, isArchetypeBase);
+	await ctx.storage.decks!.put(id, normalized.deck);
+	return {
+		ok: true,
+		deck: normalized.deck,
+		message: `${existing ? "Decklist actualizado" : "Lista guardada"} · ${normalized.resolved} imágenes listas${normalized.unresolved ? ` · ${normalized.unresolved} pendientes` : ""}${isArchetypeBase ? " · lista base" : ""}`,
+	};
 }
 
 async function saveTournament(values: Record<string, unknown>, ctx: PluginContext) {
@@ -348,6 +407,7 @@ function deckForm(archetypes: Archetype[], pokemonOptions: PokemonOption[], deck
 		{ type: "select", action_id: "archetypeId", label: "Arquetipo", options: archetypes.map((item) => ({ label: item.name, value: item.id })), initial_value: deck?.archetypeId },
 		{ type: "combobox", action_id: "secondaryPokemon", label: "Pokémon secundario de esta variante (opcional)", placeholder: "Buscar Pokémon de soporte…", options: pokemonOptions, initial_value: pokemonSelection(deck?.archetypePokemon?.[1]) },
 		{ type: "select", action_id: "format", label: "Formato", options: [{ label: "Standard", value: "standard" }, { label: "Expanded", value: "expanded" }, { label: "GLC", value: "glc" }, { label: "Personalizado", value: "custom" }], initial_value: deck?.format ?? "standard" },
+		{ type: "toggle", action_id: "isArchetypeBase", label: "Lista base del arquetipo", description: "No aparece en el catálogo /decklists ni en la tabla de decklists del arquetipo. Solo puede haber una base por arquetipo.", initial_value: deck?.isArchetypeBase ?? false },
 		{ type: "text_input", action_id: "deckText", label: "Lista exportada", multiline: true, initial_value: deck ? serializePokemonDecklist(deck.cards, true) : undefined },
 	], submit: { label: deck ? "Guardar cambios" : "Importar lista", action_id: action } };
 }
@@ -356,6 +416,7 @@ function deckActions(deck: Decklist) {
 	return { type: "accordion", label: deck.name, blocks: [{ type: "actions", elements: [
 		{ type: "button", action_id: "edit_deck", label: "Editar", value: deck.id },
 		{ type: "button", action_id: "normalize_deck", label: "Normalizar imágenes", value: deck.id },
+		{ type: "button", action_id: "reanalyze_deck", label: "Reanalizar imágenes", value: deck.id },
 		{ type: "button", action_id: "duplicate_deck", label: "Duplicar", value: deck.id },
 		{ type: "button", action_id: "delete_deck", label: "Eliminar", style: "danger", value: deck.id, confirm: { title: "Eliminar decklist", text: "Esta acción no elimina el artículo que lo use.", confirm: "Eliminar", deny: "Cancelar" } },
 	] }] };
@@ -481,12 +542,44 @@ async function renderRoundEditor(ctx: any, tournamentId: string, match?: MatchRe
 	return response(blocks, notice);
 }
 
-async function normalizeDeck(deck: Decklist, ctx: PluginContext) {
+async function clearOtherArchetypeBases(ctx: PluginContext, deckId: string, archetypeId: string, isArchetypeBase: boolean) {
+	if (!isArchetypeBase) return;
+	const result = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 200 });
+	const now = new Date().toISOString();
+	await Promise.all(result.items.map(async (item) => {
+		const deck = item.data as Decklist;
+		if (deck.id === deckId || deck.archetypeId !== archetypeId || !deck.isArchetypeBase) return;
+		await ctx.storage.decks!.put(deck.id, { ...deck, isArchetypeBase: false, updatedAt: now });
+	}));
+}
+
+function asEditorCard(value: unknown): DeckCard | null {
+	if (!value || typeof value !== "object") return null;
+	const item = value as Record<string, unknown>;
+	const quantity = Math.max(1, Math.min(60, Number(item.quantity ?? 1) || 1));
+	const category = (["pokemon", "trainer", "energy"].includes(String(item.category)) ? String(item.category) : "trainer") as CardCategory;
+	const name = String(item.name ?? item.displayName ?? "").trim();
+	if (!name) return null;
+	const setCode = optional(item.setCode);
+	const collectorNumber = optional(item.collectorNumber);
+	const imageUrl = optional(item.imageUrl);
+	const cardId = optional(item.id) ?? optional(item.cardId);
+	const printing = { id: cardId, name, setCode, collectorNumber, imageUrl };
+	return {
+		quantity,
+		category,
+		importedPrinting: { name, setCode, collectorNumber, id: cardId },
+		displayPrinting: printing,
+		resolutionStatus: imageUrl ? "manual" : "pending",
+	};
+}
+
+async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) {
 	const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? deck.language ?? "en";
 	let resolved = 0; let unresolved = 0;
 	const cards: DeckCard[] = [];
 	for (const card of deck.cards) {
-		if (!isBasicEnergy(card.importedPrinting.name) && card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
+		if (!force && !isBasicEnergy(card.importedPrinting.name) && card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
 			cards.push(card); resolved++; continue;
 		}
 		try {
@@ -556,6 +649,7 @@ async function getCachedPokemonOptions(ctx: PluginContext): Promise<PokemonOptio
 function addNotice(blocks: any[], notice: Notice) { if (notice.error) blocks.push({ type: "banner", title: "No se pudo completar", description: notice.error, variant: "error" }); if (notice.message) blocks.push({ type: "banner", title: notice.message, variant: "default" }); }
 function response(blocks: any[], notice: Notice) { return { blocks, ...(notice.message ? { toast: { message: notice.message, type: "success" } } : {}) }; }
 function asFormat(value: unknown): Decklist["format"] { return ["standard", "expanded", "glc", "custom"].includes(String(value)) ? String(value) as Decklist["format"] : "standard"; }
+function asBool(value: unknown) { return value === true || value === "true" || value === "on" || value === 1 || value === "1"; }
 function asTournamentCategory(value: unknown): TournamentResult["category"] { return tournamentCategories.some((category) => category.value === String(value)) ? String(value) as TournamentResult["category"] : "other"; }
 function optional(value: unknown) { const text = String(value ?? "").trim(); return text || undefined; }
 function optionalNumber(value: unknown) { return value === "" || value === undefined || value === null ? undefined : Number(value); }
