@@ -17,7 +17,7 @@ const imageUrl = card?.image ? `${card.image}/high.webp` : undefined;
 ---
 <figure class:list={["pokemon-card-inline", `is-${node.size ?? "medium"}`]}>
 	{imageUrl ? <img src={imageUrl} alt={node.name ?? card?.name ?? "Carta Pokémon"} loading="lazy" decoding="async" /> : <div class="placeholder">No se encontró {node.name ?? "la carta"}</div>}
-	<figcaption>{node.caption || [node.name, node.setCode, node.collectorNumber].filter(Boolean).join(" ")}</figcaption>
+	<figcaption>{node.caption || [card?.name ?? node.name, node.setCode, node.collectorNumber].filter(Boolean).join(" ")}</figcaption>
 </figure>
 <style>
 	.pokemon-card-inline { margin: 2rem auto; text-align: center; } .is-small{max-width:180px}.is-medium{max-width:280px}.is-large{max-width:420px} img,.placeholder{display:block;width:100%;aspect-ratio:245/342;border-radius:.8rem;object-fit:cover}.placeholder{display:grid;place-items:center;background:color-mix(in srgb,currentColor 8%,transparent);padding:1rem;box-sizing:border-box}figcaption{margin-top:.6rem;font-size:.75rem;opacity:.65}

@@ -85,7 +85,9 @@ export default definePlugin({
 				const cardId = url.searchParams.get("id")?.trim();
 				if (cardId) {
 					const selected = await getCard((request, init) => ctx.http!.fetch(String(request), init), language, cardId);
-					return selected ? { status: "exact", selected } : { status: "unresolved" };
+					if (!selected) return { status: "unresolved" };
+					const { pricing: _pricing, variants_detailed: _variantsDetailed, ...displayCard } = selected as typeof selected & { pricing?: unknown; variants_detailed?: unknown };
+					return { status: "exact", selected: displayCard };
 				}
 				const name = url.searchParams.get("name")?.trim();
 				if (!name) throw new Response("Nombre requerido", { status: 400 });
