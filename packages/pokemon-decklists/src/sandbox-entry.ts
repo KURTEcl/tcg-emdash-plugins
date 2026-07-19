@@ -1,10 +1,14 @@
 import { definePlugin } from "emdash";
+import type { PluginContext } from "emdash";
 import type { ArchetypePokemon, Decklist } from "./domain.js";
 import { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
 import { resolveBasicPrinting, searchCards } from "./tcgdex.js";
 
 const DEFAULT_CDN = "https://cdn.tcghub.cl";
 
+// EmDash 0.28 executes standard-format routes with (routeContext, pluginContext),
+// while its published definePlugin route type currently describes the native
+// single-context signature. Keep this cast at the package boundary only.
 export default definePlugin({
 	id: "pokemon-decklists",
 	version: "0.1.0",
@@ -26,8 +30,8 @@ export default definePlugin({
 	},
 	routes: {
 		admin: {
-			handler: async (ctx) => {
-				const interaction = ctx.input as { type?: string; page?: string; action_id?: string; values?: Record<string, unknown> };
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const interaction = routeCtx.input as { type?: string; page?: string; action_id?: string; values?: Record<string, unknown> };
 				if (interaction.type === "form_submit" && interaction.action_id === "import_deck") {
 					const values = interaction.values ?? {};
 					const parsed = parsePokemonDecklist(String(values.deckText ?? ""));
@@ -58,8 +62,8 @@ export default definePlugin({
 		},
 		decks: {
 			public: true,
-			handler: async (ctx) => {
-				const url = new URL(ctx.request.url);
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const url = new URL(routeCtx.request.url);
 				const id = url.searchParams.get("id");
 				if (id) return await ctx.storage.decks!.get(id);
 				const result = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 50 });
@@ -68,8 +72,8 @@ export default definePlugin({
 		},
 		"decks/text": {
 			public: true,
-			handler: async (ctx) => {
-				const id = new URL(ctx.request.url).searchParams.get("id");
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const id = new URL(routeCtx.request.url).searchParams.get("id");
 				if (!id) throw new Response("Deck ID requerido", { status: 400 });
 				const deck = await ctx.storage.decks!.get(id) as Decklist | null;
 				if (!deck) throw new Response("Decklist no encontrada", { status: 404 });
@@ -77,8 +81,8 @@ export default definePlugin({
 			},
 		},
 		"cards/search": {
-			handler: async (ctx) => {
-				const url = new URL(ctx.request.url);
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const url = new URL(routeCtx.request.url);
 				const name = url.searchParams.get("name")?.trim();
 				if (!name) return { items: [] };
 				const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? "en";
@@ -86,8 +90,8 @@ export default definePlugin({
 			},
 		},
 		"cards/resolve-basic": {
-			handler: async (ctx) => {
-				const url = new URL(ctx.request.url);
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const url = new URL(routeCtx.request.url);
 				const name = url.searchParams.get("name")?.trim();
 				if (!name) throw new Response("Nombre requerido", { status: 400 });
 				const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? "en";
@@ -101,7 +105,12 @@ export default definePlugin({
 			},
 		},
 	},
-});
+} as any);
+
+interface StandardRouteContext {
+	input: unknown;
+	request: { url: string; method: string; headers: Record<string, string> };
+}
 
 async function renderAdmin(ctx: any, notice: { message?: string; error?: string } = {}) {
 	const result = await ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 20 });
