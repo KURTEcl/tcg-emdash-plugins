@@ -31,7 +31,7 @@ export default definePlugin({
 		},
 		"deck-options": {
 			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => {
-				const result = await ctx.storage.decks!.query({ orderBy: { updatedAt: "desc" }, limit: 100 });
+				const result = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 100 });
 				return { items: result.items.map((item) => { const deck = item.data as Decklist; return { id: deck.id, name: `${deck.name} · ${deck.archetypeName}` }; }) };
 			},
 		},
@@ -171,7 +171,7 @@ async function saveResult(values: Record<string, unknown>, ctx: PluginContext) {
 }
 
 async function renderAdmin(ctx: any, notice: Notice = {}) {
-	const [result, archetypeResult] = await Promise.all([ctx.storage.decks.query({ orderBy: { updatedAt: "desc" }, limit: 50 }), ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 })]);
+	const [result, archetypeResult] = await Promise.all([ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 50 }), ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 })]);
 	const archetypes = archetypeResult.items.map((item: { data: Archetype }) => item.data);
 	const blocks: any[] = [{ type: "header", text: "Decklists Pokémon" }, { type: "section", text: "Importa listas desde Pokémon TCG Live o Limitless. Puedes editarlas desde el celular, duplicarlas y normalizar sus imágenes hacia impresiones básicas." }];
 	addNotice(blocks, notice);
@@ -221,7 +221,7 @@ async function renderArchetypes(ctx: any, notice: Notice = {}) {
 }
 
 async function renderResults(ctx: any, notice: Notice = {}) {
-	const [decksResult, matchesResult] = await Promise.all([ctx.storage.decks.query({ orderBy: { updatedAt: "desc" }, limit: 100 }), ctx.storage.matches.query({ orderBy: { playedAt: "desc" }, limit: 100 })]);
+	const [decksResult, matchesResult] = await Promise.all([ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 100 }), ctx.storage.matches.query({ orderBy: { playedAt: "desc" }, limit: 100 })]);
 	const decks = decksResult.items.map((item: { data: Decklist }) => item.data);
 	const matches = matchesResult.items.map((item: { data: MatchResult }) => item.data);
 	const blocks: any[] = [{ type: "header", text: "Resultados propios" }, { type: "section", text: "Registra partidas o rondas del decklist. Los resultados públicos pueden mostrarse dentro del artículo." }];
