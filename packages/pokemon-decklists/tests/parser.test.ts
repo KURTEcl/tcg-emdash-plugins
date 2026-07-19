@@ -30,6 +30,11 @@ describe("parsePokemonDecklist", () => {
 		expect(serializePokemonDecklist(parsed.cards)).toContain("2 N's Zoroark ex JTG 185");
 	});
 
+	it("serializes null/undefined cards as empty string", () => {
+		expect(serializePokemonDecklist(null)).toBe("");
+		expect(serializePokemonDecklist(undefined)).toBe("");
+	});
+
 	it("parses hyphenated set codes like PR-SW", () => {
 		const result = parsePokemonDecklist("Trainer: 1\n1 Boss's Orders PR-SW 251");
 		expect(result.errors).toEqual([]);

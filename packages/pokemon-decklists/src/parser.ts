@@ -103,11 +103,12 @@ function parseCardLine(line: string) {
 	return { quantity, name: remainder, setCode: undefined, collectorNumber: undefined };
 }
 
-export function serializePokemonDecklist(cards: DeckCard[], useImportedPrinting = false) {
+export function serializePokemonDecklist(cards: DeckCard[] | null | undefined, useImportedPrinting = false) {
+	const list = cards ?? [];
 	const labels: Record<CardCategory, string> = { pokemon: "Pokémon", trainer: "Trainer", energy: "Energy" };
 	return (["pokemon", "trainer", "energy"] as const)
 		.map((category) => {
-			const group = cards.filter((card) => card.category === category);
+			const group = list.filter((card) => card.category === category);
 			if (!group.length) return "";
 			const count = group.reduce((sum, card) => sum + card.quantity, 0);
 			const lines = group.map((card) => {

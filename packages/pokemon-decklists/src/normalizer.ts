@@ -19,7 +19,7 @@ export interface FunctionalCard {
 	regulationMark?: string;
 	legal?: Record<string, boolean>;
 	variants?: { normal?: boolean; holo?: boolean; reverse?: boolean; firstEdition?: boolean; wPromo?: boolean };
-	set?: { id: string; name: string };
+	set?: { id: string; name: string; releaseDate?: string; abbreviation?: string };
 }
 
 const premiumRarity = /illustration|secret|hyper|rainbow|shiny|gold|ultra rare|full art|promo/i;
@@ -52,16 +52,52 @@ export function chooseBasicPrinting(original: FunctionalCard, candidates: Functi
 	);
 	if (!equivalent.length) return original;
 
-	return equivalent.sort((a, b) => scoreBasicPrinting(b) - scoreBasicPrinting(a) || compareCollectorNumber(a.localId, b.localId))[0];
+	// Prefer regular (non-premium) art, then newest set, then lowest collector number
+	return equivalent.sort((a, b) =>
+		scoreBasicPrinting(b) - scoreBasicPrinting(a)
+		|| compareReleaseDate(b, a)
+		|| compareCollectorNumber(a.localId, b.localId)
+	)[0];
+}
+
+/**
+ * Name-only picks (trainers / energies): ignore effect-text fingerprints (errata changes them)
+ * and prefer the newest standard-legal non-premium print with art.
+ */
+export function choosePreferredPrinting(candidates: FunctionalCard[], format = "standard") {
+	const legal = candidates.filter((card) => card.legal?.[format] !== false);
+	const pool = legal.length ? legal : candidates;
+	if (!pool.length) return undefined;
+	return pool.sort((a, b) =>
+		scorePreferredPrinting(b, format) - scorePreferredPrinting(a, format)
+		|| compareReleaseDate(b, a)
+		|| compareCollectorNumber(a.localId, b.localId)
+	)[0];
+}
+
+function scorePreferredPrinting(card: FunctionalCard, format: string) {
+	let score = scoreBasicPrinting(card);
+	if (card.legal?.[format] === true) score += 20;
+	return score;
 }
 
 function scoreBasicPrinting(card: FunctionalCard) {
 	let score = 0;
+	if (card.image) score += 3;
 	if (card.variants?.normal) score += 8;
 	if (!card.variants?.wPromo) score += 4;
 	if (!premiumRarity.test(card.rarity ?? "")) score += 4;
 	if (card.variants?.holo && !card.variants?.normal) score -= 1;
 	return score;
+}
+
+function compareReleaseDate(a: FunctionalCard, b: FunctionalCard) {
+	const left = a.set?.releaseDate ?? "";
+	const right = b.set?.releaseDate ?? "";
+	if (left === right) return 0;
+	if (!left) return -1;
+	if (!right) return 1;
+	return left.localeCompare(right);
 }
 
 function compareCollectorNumber(a: string | number, b: string | number) {

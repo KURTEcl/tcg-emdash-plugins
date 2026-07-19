@@ -5,10 +5,10 @@ import { isCatalogDecklist } from "./domain.js";
 import { mergeEquivalentCards, parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
 import { getArchetypePokemon, listPokemonOptions, type PokemonOption } from "./pokeapi.js";
 import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
-import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
+import { getCard, pickCatalogResults, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.8.7";
+const VERSION = "0.8.10";
 const tournamentCategories = [
 	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
 	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
@@ -72,7 +72,15 @@ export default definePlugin({
 				if (query.length < 2) return { items: [] };
 				const language = (await ctx.kv.get("settings:cardLanguage") as string | null) ?? "en";
 				const cards = await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, query);
-				return { items: cards.filter((card) => card.image).map((card) => ({ id: card.id, name: card.name, number: String(card.localId), imageUrl: `${card.image}/low.webp` })) };
+				// ponytail: API orders no-art basics first; dedupe by name or "energy" yields ~1 hit after image filter
+				return {
+					items: pickCatalogResults(cards, 48).map((card) => ({
+						id: card.id,
+						name: card.name,
+						number: String(card.localId),
+						imageUrl: card.image ? `${card.image}/low.webp` : "",
+					})),
+				};
 			},
 		},
 		archetypes: {
@@ -205,7 +213,8 @@ export default definePlugin({
 				if (!name) return { items: [] };
 				const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? "en";
 				// Catalog (contains) search — `eq:` is case-sensitive and empty for "alakazam"
-				return { items: await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, name) };
+				const cards = await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, name);
+				return { items: pickCatalogResults(cards, 50) };
 			},
 		},
 		"cards/resolve-basic": {
@@ -554,7 +563,7 @@ async function renderCardSearch(ctx: any, query?: string, notice: Notice = {}) {
 	if (!query) return response(blocks, notice);
 	try {
 		const language = (await ctx.kv.get("settings:cardLanguage") as string | null) ?? "en";
-		const cards = await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, query);
+		const cards = pickCatalogResults(await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, query), 50);
 		await ctx.kv.set("recent-card-options", cards.map((card) => ({ id: card.id, name: `${card.name} · ${card.id}` })));
 		if (!cards.length) blocks.push({ type: "banner", title: "Sin resultados", description: "Prueba con una parte más corta del nombre.", variant: "alert" });
 		if (cards.length) blocks.push({ type: "table", block_id: "card-search-results", page_action_id: "page_cards", columns: [{ key: "name", label: "Carta" }, { key: "number", label: "Número" }, { key: "id", label: "ID TCGDex" }], rows: cards.map((card) => ({ name: card.name, number: String(card.localId), id: card.id })), empty_text: "Sin resultados" });
@@ -680,9 +689,13 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) 
 	let resolved = 0; let unresolved = 0;
 	const cards: DeckCard[] = [];
 	for (const card of sourceCards) {
-		if (!force && !isBasicEnergy(card.importedPrinting.name) && card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
-			cards.push(card); resolved++; continue;
-		}
+		// Always re-resolve trainers/energies so errata/newest art wins; Pokémon can reuse cache
+		const canReuse = card.category === "pokemon"
+			&& !force
+			&& card.displayPrinting.imageUrl
+			&& card.resolutionStatus !== "pending"
+			&& card.resolutionStatus !== "unresolved";
+		if (canReuse) { cards.push(card); resolved++; continue; }
 		try {
 			const result = await resolveBasicPrinting(
 				(url, init) => ctx.http!.fetch(String(url), init),
@@ -695,7 +708,11 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) 
 			);
 			if (result.status === "unresolved" || !result.selected) { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; continue; }
 			const selected = result.selected;
-			cards.push({ ...card, displayPrinting: { id: selected.id, name: selected.name, setCode: card.importedPrinting.setCode, collectorNumber: String(selected.localId), imageUrl: selected.image ? `${selected.image}/high.webp` : undefined, rarity: selected.rarity }, resolutionStatus: result.status });
+			// Use the selected print's set code — never mix imported set with another card's number (MEE + 79)
+			const setCode = selected.set?.abbreviation
+				?? (selected.set?.id ? selected.set.id.toUpperCase() : undefined)
+				?? card.importedPrinting.setCode;
+			cards.push({ ...card, displayPrinting: { id: selected.id, name: selected.name, setCode, collectorNumber: String(selected.localId), imageUrl: selected.image ? `${selected.image}/high.webp` : undefined, rarity: selected.rarity }, resolutionStatus: result.status });
 			resolved++;
 		} catch { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; }
 	}
@@ -705,8 +722,9 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) 
 
 function reuseResolvedCards(cards: DeckCard[], previous: DeckCard[] | undefined) {
 	if (!previous?.length) return cards;
-	const resolved = new Map(previous.map((card) => [printingKey(card), card]));
-	return cards.map((card) => resolved.get(printingKey(card)) ?? card);
+	// Only reuse Pokémon printings — trainers/energies must re-resolve to the newest basic art
+	const resolved = new Map(previous.filter((card) => card.category === "pokemon").map((card) => [printingKey(card), card]));
+	return cards.map((card) => (card.category === "pokemon" ? resolved.get(printingKey(card)) ?? card : card));
 }
 
 function printingKey(card: DeckCard) {

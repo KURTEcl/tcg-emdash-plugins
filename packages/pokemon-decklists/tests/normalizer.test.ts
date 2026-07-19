@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseBasicPrinting, type FunctionalCard } from "../src/normalizer.js";
+import { chooseBasicPrinting, choosePreferredPrinting, type FunctionalCard } from "../src/normalizer.js";
 
 const base: FunctionalCard = {
 	id: "regular", name: "Zoroark ex", localId: "98", category: "Pokemon", hp: 280,
@@ -38,5 +38,44 @@ describe("chooseBasicPrinting", () => {
 			legal: { standard: true },
 		};
 		expect(chooseBasicPrinting(promo, [promo, setPrint]).id).toBe("me01-056");
+	});
+
+	it("prefers the newer regular reprint when scores tie", () => {
+		const older = {
+			...base,
+			id: "old",
+			localId: "10",
+			image: "https://img/old",
+			set: { id: "swsh1", name: "Sword & Shield", releaseDate: "2020-02-07" },
+		};
+		const newer = {
+			...base,
+			id: "new",
+			localId: "20",
+			image: "https://img/new",
+			set: { id: "sv01", name: "Scarlet & Violet", releaseDate: "2023-03-31" },
+		};
+		expect(chooseBasicPrinting(older, [older, newer]).id).toBe("new");
+	});
+});
+
+describe("choosePreferredPrinting", () => {
+	it("picks the newest standard common over an older print with different effect text", () => {
+		const oldText: FunctionalCard = {
+			id: "bw10-90", name: "Ultra Ball", localId: "90", category: "Trainer", rarity: "Uncommon",
+			effect: "Discard 2 cards from your hand.", image: "https://img/old",
+			legal: { standard: false, expanded: true }, variants: { normal: true },
+			set: { id: "bw10", name: "Plasma Blast", releaseDate: "2013-08-14" },
+		};
+		const newest: FunctionalCard = {
+			id: "me02.5-213", name: "Ultra Ball", localId: "213", category: "Trainer", rarity: "Common",
+			effect: "You can use this card only if you discard 2 other cards from your hand.",
+			image: "https://img/new", legal: { standard: true, expanded: true }, variants: { normal: true },
+			set: { id: "me02.5", name: "Ascended Heroes", releaseDate: "2026-01-30" },
+		};
+		const premium: FunctionalCard = {
+			...newest, id: "me02.5-264", localId: "264", rarity: "Ultra Rare", variants: { holo: true },
+		};
+		expect(choosePreferredPrinting([oldText, premium, newest], "standard")?.id).toBe("me02.5-213");
 	});
 });

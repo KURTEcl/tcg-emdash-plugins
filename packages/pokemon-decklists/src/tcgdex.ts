@@ -1,6 +1,6 @@
 import dns from "node:dns";
 import type { CardCategory } from "./domain.js";
-import { chooseBasicPrinting, type FunctionalCard } from "./normalizer.js";
+import { chooseBasicPrinting, choosePreferredPrinting, type FunctionalCard } from "./normalizer.js";
 
 const API_BASE = "https://api.tcgdex.net/v2";
 
@@ -25,7 +25,23 @@ export async function searchCardCatalog(fetcher: typeof fetch, language: string,
 	const url = `${API_BASE}/${safeLanguage(language)}/cards?name=${encodeURIComponent(query)}`;
 	const response = await fetcher(url, { headers: { accept: "application/json" } });
 	if (!response.ok) throw new Error(`TCGDex respondió ${response.status}`);
-	return (await response.json() as CardBrief[]).slice(0, 50);
+	return await response.json() as CardBrief[];
+}
+
+/**
+ * Broad queries like "energy" return hundreds of kit/basic rows without art first.
+ * Collapse to one row per name (prefer a printing with image) before limiting.
+ */
+export function pickCatalogResults(cards: CardBrief[], limit = 50) {
+	const byName = new Map<string, CardBrief>();
+	for (const card of cards) {
+		const key = card.name.trim().toLowerCase();
+		const previous = byName.get(key);
+		if (!previous || (!previous.image && card.image)) byName.set(key, card);
+	}
+	return [...byName.values()]
+		.sort((a, b) => Number(Boolean(b.image)) - Number(Boolean(a.image)) || a.name.localeCompare(b.name))
+		.slice(0, limit);
 }
 
 export async function getCard(fetcher: typeof fetch, language: string, id: string) {
@@ -36,13 +52,37 @@ export async function getCard(fetcher: typeof fetch, language: string, id: strin
 	return await response.json() as FunctionalCard;
 }
 
-async function getSetAbbreviation(fetcher: typeof fetch, language: string, id: string) {
+async function getSetMeta(fetcher: typeof fetch, language: string, id: string) {
 	const response = await fetcher(`${API_BASE}/${safeLanguage(language)}/sets/${encodeURIComponent(id)}`, {
 		headers: { accept: "application/json" },
 	});
 	if (!response.ok) return undefined;
-	const set = await response.json() as { abbreviation?: { official?: string } };
-	return set.abbreviation?.official?.trim().toUpperCase();
+	const set = await response.json() as { abbreviation?: { official?: string }; releaseDate?: string };
+	return {
+		abbreviation: set.abbreviation?.official?.trim().toUpperCase(),
+		releaseDate: set.releaseDate?.trim() || undefined,
+	};
+}
+
+async function getSetAbbreviation(fetcher: typeof fetch, language: string, id: string) {
+	return (await getSetMeta(fetcher, language, id))?.abbreviation;
+}
+
+async function hydrateSetMeta(fetcher: typeof fetch, language: string, cards: FunctionalCard[]) {
+	const ids = [...new Set(cards.map((card) => card.set?.id).filter((id): id is string => Boolean(id)))];
+	const meta = new Map<string, { abbreviation?: string; releaseDate?: string }>();
+	await Promise.all(ids.map(async (id) => {
+		const value = await getSetMeta(fetcher, language, id);
+		if (value) meta.set(id, value);
+	}));
+	for (const card of cards) {
+		const id = card.set?.id;
+		if (!id) continue;
+		const value = meta.get(id);
+		if (!value) continue;
+		card.set = { ...card.set!, abbreviation: value.abbreviation, releaseDate: value.releaseDate };
+	}
+	return cards;
 }
 
 /**
@@ -64,7 +104,7 @@ export async function resolveBasicPrinting(
 		|| options?.category === "energy"
 		|| isBasicEnergy(name);
 
-	if (nameOnly) return resolveByName(fetcher, language, brief, format);
+	if (nameOnly) return resolveByName(fetcher, language, brief, format, name, options?.category);
 
 	let possibleOriginals = collectorNumber
 		? brief.filter((card) => equivalentCollectorNumber(card.localId, collectorNumber))
@@ -99,11 +139,15 @@ export async function resolveBasicPrinting(
 	const originalBrief = possibleOriginals.length === 1
 		? possibleOriginals[0]
 		: possibleOriginals.find((card) => card.image) ?? possibleOriginals[0];
-	const original = await getCard(fetcher, language, originalBrief.id);
-	if (!original) return { status: "unresolved" as const, candidates: brief };
 
-	const details = (await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
-		.filter((card): card is FunctionalCard => card !== null);
+	const details = await hydrateSetMeta(
+		fetcher,
+		language,
+		(await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
+			.filter((card): card is FunctionalCard => card !== null),
+	);
+	const original = details.find((card) => card.id === originalBrief.id) ?? await getCard(fetcher, language, originalBrief.id);
+	if (!original) return { status: "unresolved" as const, candidates: brief };
 
 	let selected = possibleOriginals.length === 1
 		? original
@@ -139,19 +183,51 @@ async function resolveByName(
 	language: string,
 	brief: Array<{ id: string; localId: string | number; name: string; image?: string }>,
 	format: string,
+	rawName: string,
+	category?: CardCategory,
 ) {
 	if (!brief.length) return { status: "unresolved" as const, candidates: brief };
-	const details = (await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
-		.filter((card): card is FunctionalCard => card !== null);
-	const withImage = details.filter((card) => card.image);
-	const pool = withImage.length ? withImage : details;
+	const details = await hydrateSetMeta(
+		fetcher,
+		language,
+		(await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
+			.filter((card): card is FunctionalCard => card !== null),
+	);
+	const typed = filterEnergyCandidates(details, rawName, category);
+	// Prefer art when available, but never let image-only pool mix Special into Basic Energy
+	const withImage = typed.filter((card) => card.image);
+	const pool = withImage.length ? withImage : typed;
 	if (!pool.length) return { status: "unresolved" as const, candidates: brief };
-	const selected = chooseBasicPrinting(pool[0], pool, format);
+	// Trainers/energies: newest basic print — do not anchor to the oldest effect-text fingerprint
+	const selected = choosePreferredPrinting(pool, format) ?? pool[0];
 	return {
 		status: "basic-equivalent" as const,
-		original: withoutCommercialData(pool[0]),
+		original: withoutCommercialData(selected),
 		selected: withoutCommercialData(selected),
 	};
+}
+
+/** Keep basic vs special energy from collapsing onto the wrong TCGdex row. */
+function filterEnergyCandidates(details: FunctionalCard[], rawName: string, category?: CardCategory) {
+	if (category !== "energy" && !isBasicEnergy(rawName)) return details;
+	if (isBasicEnergy(rawName)) {
+		const basic = details.filter(isBasicEnergyCard);
+		return basic.length ? basic : details;
+	}
+	const special = details.filter(isSpecialEnergyCard);
+	return special.length ? special : details;
+}
+
+function isBasicEnergyCard(card: FunctionalCard) {
+	if (card.category && card.category.toLowerCase() !== "energy") return false;
+	if (card.energyType === "Normal") return !card.effect;
+	if (card.energyType === "Special") return false;
+	return !card.effect;
+}
+
+function isSpecialEnergyCard(card: FunctionalCard) {
+	if (card.category && card.category.toLowerCase() !== "energy") return false;
+	return card.energyType === "Special" || Boolean(card.effect);
 }
 
 /** mep ids use 003; live exports sometimes send 3 or 003 */
@@ -170,6 +246,7 @@ export function equivalentCollectorNumber(a: string | number, b: string | number
 }
 
 function canonicalCardName(name: string) {
+	const trimmed = name.trim();
 	const energyNames: Record<string, string> = {
 		"basic {d} energy": "Darkness Energy",
 		"basic {r} energy": "Fire Energy",
@@ -179,12 +256,22 @@ function canonicalCardName(name: string) {
 		"basic {p} energy": "Psychic Energy",
 		"basic {f} energy": "Fighting Energy",
 		"basic {m} energy": "Metal Energy",
+		"basic darkness energy": "Darkness Energy",
+		"basic fire energy": "Fire Energy",
+		"basic grass energy": "Grass Energy",
+		"basic water energy": "Water Energy",
+		"basic lightning energy": "Lightning Energy",
+		"basic psychic energy": "Psychic Energy",
+		"basic fighting energy": "Fighting Energy",
+		"basic metal energy": "Metal Energy",
 	};
-	return energyNames[name.trim().toLowerCase()] ?? name;
+	return energyNames[trimmed.toLowerCase()] ?? trimmed;
 }
 
 export function isBasicEnergy(name: string) {
-	return /^(?:basic \{[dgrwlpfm]\} energy|darkness energy|fire energy|grass energy|water energy|lightning energy|psychic energy|fighting energy|metal energy)$/i.test(name.trim());
+	const text = name.trim();
+	if (/^basic \{[dgrwlpfm]\} energy$/i.test(text)) return true;
+	return /^(?:basic\s+)?(?:darkness|fire|grass|water|lightning|psychic|fighting|metal)\s+energy$/i.test(text);
 }
 
 function safeLanguage(language: string) {

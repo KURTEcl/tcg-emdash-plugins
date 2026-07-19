@@ -23,7 +23,9 @@ if (node.deckId) {
 		const response = await fetch(endpoint);
 		if (response.ok) {
 			const body = await response.json();
-			deck = body.data ?? body;
+			// ponytail: `{ data: null }` is truthy via `?? body` — only accept a real deck
+			const payload = body.data ?? body;
+			deck = Array.isArray(payload?.cards) ? payload : null;
 		}
 		if (node.showResults) {
 			const resultsEndpoint = new URL("/_emdash/api/plugins/pokemon-decklists/matches", Astro.url.origin);
@@ -31,7 +33,9 @@ if (node.deckId) {
 			const resultResponse = await fetch(resultsEndpoint);
 			if (resultResponse.ok) {
 				const body = await resultResponse.json();
-				({ items: matches, stats } = body.data ?? body);
+				const payload = body.data ?? body;
+				matches = Array.isArray(payload?.items) ? payload.items : [];
+				stats = payload?.stats ?? stats;
 			}
 		}
 	} catch { /* The block renders a helpful empty state below. */ }
@@ -39,6 +43,11 @@ if (node.deckId) {
 
 const text = deck ? serializePokemonDecklist(deck.cards) : "";
 const cards = deck ? (["pokemon", "trainer", "energy"] as const).flatMap((category) => deck!.cards.filter((card) => card.category === category)) : [];
+const showCards = displayMode !== "text";
+const showText = displayMode !== "images";
+const showResultsTab = Boolean(node.showResults && stats.total > 0);
+const showTabs = (showCards && showText) || showResultsTab;
+const defaultTab = showCards ? "cards" : showText ? "text" : "results";
 const instanceId = crypto.randomUUID();
 const copyId = `deck-copy-${instanceId}`;
 const cardDialogId = `deck-card-dialog-${instanceId}`;
@@ -67,9 +76,39 @@ const opponentSprites = (match: MatchResult) => (match.opponentPokemon ?? []).sl
 			</div>
 		</header>
 
-		{displayMode === "both" && <div class="tcg-deck__tabs" role="tablist" aria-label="Vista del decklist"><button type="button" role="tab" aria-selected="true" data-deck-tab="cards">Cartas</button><button type="button" role="tab" aria-selected="false" data-deck-tab="text">Lista</button></div>}
-		{displayMode !== "text" && <div class="tcg-deck__panel" data-deck-panel="cards"><div class="tcg-deck__cards">{cards.map((card: DeckCard) => <figure class:list={["tcg-card", { "tcg-card--missing": !card.displayPrinting.imageUrl }]}><button class="tcg-card__open" type="button" data-card-open data-card-name={card.displayPrinting.name} data-card-quantity={card.quantity} data-card-set={card.displayPrinting.setCode ?? card.importedPrinting.setCode ?? ""} data-card-number={card.displayPrinting.collectorNumber ?? card.importedPrinting.collectorNumber ?? ""} data-card-rarity={card.displayPrinting.rarity ?? ""} data-card-image={card.displayPrinting.imageUrl ?? ""} data-card-search={`/decklists?card=${encodeURIComponent(card.displayPrinting.name)}`} aria-label={`Ver detalles de ${card.displayPrinting.name}`} title={`Ver detalles de ${card.displayPrinting.name}`}><span class="tcg-card__image">{card.displayPrinting.imageUrl ? <img src={lowImageUrl(card.displayPrinting.imageUrl)} alt={card.displayPrinting.name} loading="lazy" decoding="async" /> : <span class="tcg-card__placeholder">{card.displayPrinting.name}</span>}<strong class="tcg-card__quantity" aria-label={`${card.quantity} copias`}>{card.quantity}</strong></span></button></figure>)}</div></div>}
-		{displayMode !== "images" && <div class="tcg-deck__panel" data-deck-panel="text" hidden={displayMode === "both"}><pre class="tcg-deck__text" id={copyId}>{text}</pre></div>}
+		{showTabs && (
+			<div class="tcg-deck__tabs" role="tablist" aria-label="Vista del decklist">
+				{showCards && <button type="button" role="tab" aria-selected={defaultTab === "cards"} data-deck-tab="cards">Cartas</button>}
+				{showText && <button type="button" role="tab" aria-selected={defaultTab === "text"} data-deck-tab="text">Lista</button>}
+				{showResultsTab && <button type="button" role="tab" aria-selected={defaultTab === "results"} data-deck-tab="results">Resultados</button>}
+			</div>
+		)}
+		{showCards && <div class="tcg-deck__panel" data-deck-panel="cards" hidden={showTabs && defaultTab !== "cards"}><div class="tcg-deck__cards">{cards.map((card: DeckCard) => <figure class:list={["tcg-card", { "tcg-card--missing": !card.displayPrinting.imageUrl }]}><button class="tcg-card__open" type="button" data-card-open data-card-name={card.displayPrinting.name} data-card-quantity={card.quantity} data-card-set={card.displayPrinting.setCode ?? card.importedPrinting.setCode ?? ""} data-card-number={card.displayPrinting.collectorNumber ?? card.importedPrinting.collectorNumber ?? ""} data-card-rarity={card.displayPrinting.rarity ?? ""} data-card-image={card.displayPrinting.imageUrl ?? ""} data-card-search={`/decklists?card=${encodeURIComponent(card.displayPrinting.name)}`} aria-label={`Ver detalles de ${card.displayPrinting.name}`} title={`Ver detalles de ${card.displayPrinting.name}`}><span class="tcg-card__image">{card.displayPrinting.imageUrl ? <img src={lowImageUrl(card.displayPrinting.imageUrl)} alt={card.displayPrinting.name} loading="lazy" decoding="async" /> : <span class="tcg-card__placeholder">{card.displayPrinting.name}</span>}<strong class="tcg-card__quantity" aria-label={`${card.quantity} copias`}>{card.quantity}</strong></span></button></figure>)}</div></div>}
+		{showText && <div class="tcg-deck__panel" data-deck-panel="text" hidden={showTabs ? defaultTab !== "text" : false}><pre class="tcg-deck__text" id={copyId}>{text}</pre></div>}
+		{showResultsTab && (
+			<div class="tcg-deck__panel" data-deck-panel="results" hidden={defaultTab !== "results"}>
+				<section class="tcg-results">
+					<div class="tcg-results__summary"><strong>{stats.winRate}%</strong><span>win rate · {stats.total} rondas</span></div>
+					<div class="tcg-results__numbers"><span>{stats.wins} W</span><span>{stats.losses} L</span><span>{stats.draws} T</span></div>
+					<ul>{matches.slice(0, 8).map((match) => {
+						const rivals = opponentSprites(match);
+						return <li>
+							<span class="tcg-results__row">
+								{rivals.length > 0 && <span class="tcg-results__sprites" title={match.opponentArchetype}>{rivals.map((sprite) => <img src={sprite.url} alt={sprite.name} title={sprite.name} width="28" height="28" loading="lazy" />)}</span>}
+								<span>
+									{match.tournamentId
+										? <a class="tcg-results__event" href={`/results/${match.tournamentId}`}>{match.eventName ?? "Torneo"}</a>
+										: (match.eventName ?? match.playedAt)}
+									{match.round ? ` · R${match.round}` : ""}
+									{match.videoUrl ? <> · <a class="tcg-results__video" href={match.videoUrl} target="_blank" rel="noopener noreferrer">Ver video</a></> : null}
+								</span>
+							</span>
+							<strong class={`is-${match.result}`}>{match.result === "win" ? "W" : match.result === "loss" ? "L" : "T"}</strong>
+						</li>;
+					})}</ul>
+				</section>
+			</div>
+		)}
 
 		<dialog class="tcg-card-modal" id={cardDialogId} data-card-dialog aria-labelledby={`${cardDialogId}-title`}>
 			<div class="tcg-card-modal__shell">
@@ -77,29 +116,6 @@ const opponentSprites = (match: MatchResult) => (match.opponentPokemon ?? []).sl
 				<div class="tcg-card-modal__body"><div class="tcg-card-modal__media" data-card-modal-media></div><div class="tcg-card-modal__info"><p data-card-modal-quantity></p><dl><div data-card-modal-set-row><dt>Colección</dt><dd data-card-modal-set></dd></div><div data-card-modal-number-row><dt>Número</dt><dd data-card-modal-number></dd></div><div data-card-modal-rarity-row><dt>Rareza</dt><dd data-card-modal-rarity></dd></div></dl><a data-card-modal-search href="/decklists">Ver otros decklists con esta carta <span aria-hidden="true">→</span></a></div></div>
 			</div>
 		</dialog>
-
-		{node.showResults && stats.total > 0 && (
-			<section class="tcg-results">
-				<div class="tcg-results__summary"><strong>{stats.winRate}%</strong><span>win rate · {stats.total} rondas</span></div>
-				<div class="tcg-results__numbers"><span>{stats.wins} W</span><span>{stats.losses} L</span><span>{stats.draws} T</span></div>
-				<ul>{matches.slice(0, 8).map((match) => {
-					const rivals = opponentSprites(match);
-					return <li>
-						<span class="tcg-results__row">
-							{rivals.length > 0 && <span class="tcg-results__sprites" title={match.opponentArchetype}>{rivals.map((sprite) => <img src={sprite.url} alt={sprite.name} title={sprite.name} width="28" height="28" loading="lazy" />)}</span>}
-							<span>
-								{match.tournamentId
-									? <a class="tcg-results__event" href={`/results/${match.tournamentId}`}>{match.eventName ?? "Torneo"}</a>
-									: (match.eventName ?? match.playedAt)}
-								{match.round ? ` · R${match.round}` : ""}
-								{match.videoUrl ? <> · <a class="tcg-results__video" href={match.videoUrl} target="_blank" rel="noopener noreferrer">Ver video</a></> : null}
-							</span>
-						</span>
-						<strong class={`is-${match.result}`}>{match.result === "win" ? "W" : match.result === "loss" ? "L" : "T"}</strong>
-					</li>;
-				})}</ul>
-			</section>
-		)}
 	</section>
 ) : (
 	<aside class="tcg-deck tcg-deck--empty">Selecciona un decklist válido o comprueba que siga publicado en el panel.</aside>
@@ -200,7 +216,7 @@ const opponentSprites = (match: MatchResult) => (match.opponentPokemon ?? []).sl
 	.tcg-card-modal__info dd { margin: 0; text-align: right; }
 	.tcg-card-modal .tcg-card-modal__info a { display: inline-flex; align-items: center; gap: .5rem; padding: .7rem 1rem; border-radius: 999px; color: var(--color-on-brand, white); background: var(--color-brand, #d72638); font-weight: 700; text-decoration: none; }
 	.tcg-deck__text { margin: 0; white-space: pre-wrap; overflow-x: auto; font: .76rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-	.tcg-results { border-top: 1px solid var(--deck-line); padding: clamp(1.25rem, 4vw, 2rem); }
+	.tcg-results { padding: .5rem .25rem .25rem; }
 	.tcg-results__summary { display: flex; align-items: baseline; gap: .6rem; }
 	.tcg-results__summary strong { font-size: 2rem; }
 	.tcg-results__numbers { display: flex; gap: .8rem; margin: .45rem 0 1rem; opacity: .65; }

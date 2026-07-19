@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.8.7";
+const VERSION = "0.8.10";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
@@ -79,5 +79,6 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 
 export type * from "./domain.js";
 export { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
-export { chooseBasicPrinting, functionalFingerprint } from "./normalizer.js";
+export { chooseBasicPrinting, choosePreferredPrinting, functionalFingerprint } from "./normalizer.js";
 export { buildPokemonSpriteUrl, DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
+export { isBasicEnergy, pickCatalogResults, resolveBasicPrinting, searchCards } from "./tcgdex.js";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isBasicEnergy, resolveBasicPrinting, searchCards } from "../src/tcgdex.js";
+import { isBasicEnergy, pickCatalogResults, resolveBasicPrinting, searchCards } from "../src/tcgdex.js";
 
 describe("searchCards", () => {
 	it("matches names case-insensitively without relying on eq:", async () => {
@@ -17,15 +17,70 @@ describe("searchCards", () => {
 	});
 });
 
+describe("pickCatalogResults", () => {
+	it("dedupes by name and keeps a printing with art when the first hits have none", () => {
+		const cards = [
+			{ id: "mee-007", localId: "007", name: "Darkness Energy" },
+			{ id: "sve-015", localId: "015", name: "Darkness Energy" },
+			{ id: "swsh12.5-158", localId: "158", name: "Darkness Energy", image: "https://img/d" },
+			{ id: "pop5-4", localId: "4", name: "Double Rainbow Energy", image: "https://img/r" },
+			{ id: "mee-001", localId: "001", name: "Grass Energy" },
+		];
+		const picked = pickCatalogResults(cards, 10);
+		expect(picked.map((card) => card.name).sort()).toEqual(["Darkness Energy", "Double Rainbow Energy", "Grass Energy"]);
+		expect(picked.find((card) => card.name === "Darkness Energy")?.id).toBe("swsh12.5-158");
+	});
+});
+
 describe("basic energy detection", () => {
 	it("recognizes Limitless and TCG Live basic energy names", () => {
 		expect(isBasicEnergy("Darkness Energy")).toBe(true);
 		expect(isBasicEnergy("Basic {D} Energy")).toBe(true);
+		expect(isBasicEnergy("Basic Darkness Energy")).toBe(true);
 	});
 
 	it("does not classify special energy cards as basic", () => {
 		expect(isBasicEnergy("Jet Energy")).toBe(false);
 		expect(isBasicEnergy("Legacy Energy")).toBe(false);
+	});
+});
+
+describe("energy resolution", () => {
+	it("picks a Normal basic Darkness Energy with art, not the old Special Energy", async () => {
+		const cards = [
+			{ id: "mee-007", localId: "007", name: "Darkness Energy" },
+			{ id: "hgss3-79", localId: "79", name: "Darkness Energy", image: "https://img/special" },
+			{ id: "swsh12.5-158", localId: "158", name: "Darkness Energy", image: "https://img/basic" },
+		];
+		const fetcher = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes("/cards?")) return Response.json(cards);
+			if (url.endsWith("/cards/mee-007")) {
+				return Response.json({ ...cards[0], category: "Energy", energyType: "Normal", legal: { standard: true }, set: { id: "mee", name: "MEE" } });
+			}
+			if (url.endsWith("/cards/hgss3-79")) {
+				return Response.json({
+					...cards[1], category: "Energy", energyType: "Special", effect: "+10 damage", legal: { standard: false },
+					set: { id: "hgss3", name: "Undaunted" },
+				});
+			}
+			if (url.endsWith("/cards/swsh12.5-158")) {
+				return Response.json({
+					...cards[2], category: "Energy", energyType: "Normal", legal: { standard: true }, variants: { normal: true },
+					set: { id: "swsh12.5", name: "Crown Zenith" },
+				});
+			}
+			if (url.endsWith("/sets/mee")) return Response.json({ abbreviation: { official: "MEE" }, releaseDate: "2025-09-25" });
+			if (url.endsWith("/sets/hgss3")) return Response.json({ abbreviation: { official: "UD" }, releaseDate: "2010-08-18" });
+			if (url.endsWith("/sets/swsh12.5")) return Response.json({ abbreviation: { official: "CRZ" }, releaseDate: "2023-01-20" });
+			return new Response(null, { status: 404 });
+		};
+
+		const result = await resolveBasicPrinting(fetcher as typeof fetch, "en", "Darkness Energy", "79", "MEE", "standard", { category: "energy" });
+		expect(result.status).toBe("basic-equivalent");
+		expect(result.selected?.id).toBe("swsh12.5-158");
+		expect(result.selected?.energyType).toBe("Normal");
+		expect(result.selected?.set?.abbreviation).toBe("CRZ");
 	});
 });
 

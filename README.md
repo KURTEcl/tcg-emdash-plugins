@@ -2,6 +2,8 @@
 
 Plugins open source para sitios EmDash orientados a contenido TCG.
 
+Hoy el plugin de decklists está pensado para **Pokémon TCG**. Se ampliará a otros TCG (p. ej. One Piece, Riftbound) con plugins por juego y el mismo patrón (catálogo, import de listas, admin, bloques, resultados donde aplique).
+
 Usar junto con [tcg-emdash-starter](https://github.com/KURTEcl/tcg-emdash-starter).  
 Demo: [tcg.kurte.cl](https://tcg.kurte.cl)
 
@@ -10,9 +12,9 @@ Demo: [tcg.kurte.cl](https://tcg.kurte.cl)
 | Paquete | Nombre npm | Qué hace |
 | --- | --- | --- |
 | `packages/theme-settings` | `@tcg-emdash/plugin-theme-settings` | Colores y Google Fonts desde el admin (Apariencia) |
-| `packages/pokemon-decklists` | `@tcg-emdash/plugin-pokemon-decklists` | Decklists, arquetipos, cartas, galería, resultados, catálogo `/decklists` |
+| `packages/pokemon-decklists` | `@tcg-emdash/plugin-pokemon-decklists` | Decklists, arquetipos, cartas, galería, resultados, catálogo `/decklists` (Pokémon TCG) |
 
-Planificados: `tournaments`, `hub-connector` (ver notas abajo).
+Planificados: plugins para otros TCG; también `tournaments`, `hub-connector` (ver notas abajo).
 
 ---
 

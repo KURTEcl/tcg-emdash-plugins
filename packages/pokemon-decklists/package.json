@@ -1,6 +1,6 @@
 {
 	"name": "@tcg-emdash/plugin-pokemon-decklists",
-	"version": "0.8.7",
+	"version": "0.8.10",
 	"description": "Pokémon TCG decklists, archetypes and match results for EmDash",
 	"type": "module",
 	"exports": {
