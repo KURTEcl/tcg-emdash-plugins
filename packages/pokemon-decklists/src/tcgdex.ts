@@ -24,9 +24,9 @@ export async function resolveBasicPrinting(
 	collectorNumber?: string,
 	format = "standard",
 ) {
-	const brief = await searchCards(fetcher, language, name);
+	const brief = await searchCards(fetcher, language, canonicalCardName(name));
 	const possibleOriginals = collectorNumber
-		? brief.filter((card) => String(card.localId).toLowerCase() === collectorNumber.toLowerCase())
+		? brief.filter((card) => equivalentCollectorNumber(card.localId, collectorNumber))
 		: brief;
 	if (possibleOriginals.length !== 1) return { status: "unresolved" as const, candidates: brief };
 
@@ -40,6 +40,28 @@ export async function resolveBasicPrinting(
 		original: withoutCommercialData(original),
 		selected: withoutCommercialData(selected),
 	};
+}
+
+function equivalentCollectorNumber(a: string | number, b: string | number) {
+	const left = String(a).trim().toLowerCase();
+	const right = String(b).trim().toLowerCase();
+	if (left === right) return true;
+	if (/^\d+$/.test(left) && /^\d+$/.test(right)) return Number(left) === Number(right);
+	return left.replace(/^0+/, "") === right.replace(/^0+/, "");
+}
+
+function canonicalCardName(name: string) {
+	const energyNames: Record<string, string> = {
+		"basic {d} energy": "Darkness Energy",
+		"basic {r} energy": "Fire Energy",
+		"basic {g} energy": "Grass Energy",
+		"basic {w} energy": "Water Energy",
+		"basic {l} energy": "Lightning Energy",
+		"basic {p} energy": "Psychic Energy",
+		"basic {f} energy": "Fighting Energy",
+		"basic {m} energy": "Metal Energy",
+	};
+	return energyNames[name.trim().toLowerCase()] ?? name;
 }
 
 function safeLanguage(language: string) {
