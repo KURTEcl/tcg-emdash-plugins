@@ -2,7 +2,7 @@ import { definePlugin } from "emdash";
 import type { PluginDescriptor } from "emdash";
 import { defaults, fontOptions } from "./settings.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const fontChoices = fontOptions.map((font) => ({ value: font, label: font }));
 const fontSet = new Set<string>(fontOptions);
 const hexColor = /^#[0-9a-f]{6}$/i;

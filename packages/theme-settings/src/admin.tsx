@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
+import { Banner, Button } from "@cloudflare/kumo";
 import { apiFetch } from "@emdash-cms/admin";
 import { defaults, fontOptions } from "./settings.js";
 
 type Settings = { [K in keyof typeof defaults]: string };
 type Notice = { type: "success" | "error"; message: string } | null;
 const API = "/_emdash/api/plugins/theme-settings/settings";
+
+const PANEL = "rounded-lg border border-kumo-line bg-kumo-base p-5";
+const FIELD = "mt-2 h-10 w-full rounded-lg border border-kumo-line bg-kumo-elevated px-3 text-sm text-kumo-default outline-none focus:ring-[1.5px] focus:ring-kumo-brand/50";
 
 const colors: Array<{ key: keyof Settings; label: string; description: string }> = [
 	{ key: "backgroundColor", label: "Fondo", description: "Fondo general del sitio" },
@@ -43,19 +47,60 @@ function AppearancePage() {
 		} finally { setSaving(false); }
 	};
 
-	if (!settings) return <div className="py-16 text-center text-sm text-kumo-subtle">{notice?.message ?? "Cargando…"}</div>;
+	if (!settings) {
+		return <div className="py-16 text-center text-sm text-kumo-subtle">{notice?.message ?? "Cargando…"}</div>;
+	}
+
 	return <div className="max-w-5xl">
 		<div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-			<div><h1 className="text-2xl font-semibold text-kumo-default">Apariencia</h1><p className="mt-1 text-sm text-kumo-subtle">Personaliza los colores y las fuentes públicas del sitio.</p></div>
-			<button type="button" onClick={() => void save()} disabled={saving} className="inline-flex h-9 items-center justify-center rounded-md bg-kumo-accent px-4 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50">{saving ? "Guardando…" : "Guardar cambios"}</button>
+			<div>
+				<h1 className="text-2xl font-bold text-kumo-default">Apariencia</h1>
+				<p className="mt-1 text-sm text-kumo-subtle">Personaliza los colores y las fuentes públicas del sitio.</p>
+			</div>
+			<Button type="button" variant="primary" loading={saving} onClick={() => void save()}>Guardar cambios</Button>
 		</div>
-		{notice && <div className={`mb-4 rounded-md border px-4 py-3 text-sm ${notice.type === "error" ? "border-kumo-danger/40 text-kumo-danger" : "border-kumo-line text-kumo-default"}`}>{notice.message}</div>}
+		{notice && <Banner className="mb-4" variant={notice.type === "error" ? "error" : "default"} description={notice.message} />}
 		<div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
 			<div className="space-y-6">
-				<section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5"><h2 className="text-base font-semibold text-kumo-default">Colores</h2><p className="mt-1 text-sm text-kumo-subtle">Usa valores hexadecimales de seis dígitos.</p><div className="mt-5 grid gap-4 sm:grid-cols-2">{colors.map(({ key, label, description }) => <label key={key} className="block"><span className="text-sm font-medium text-kumo-default">{label}</span><span className="mt-0.5 block text-xs text-kumo-subtle">{description}</span><span className="mt-2 flex h-10 overflow-hidden rounded-md border border-kumo-line bg-kumo-default"><input aria-label={`Selector de ${label}`} type="color" value={settings[key]} onChange={(event) => update(key, event.target.value)} className="h-full w-12 cursor-pointer border-0 bg-transparent p-1" /><input aria-label={label} value={settings[key]} onChange={(event) => update(key, event.target.value)} pattern="#[0-9A-Fa-f]{6}" className="min-w-0 flex-1 border-0 bg-transparent px-3 font-mono text-sm text-kumo-default outline-none" /></span></label>)}</div></section>
-				<section className="rounded-lg border border-kumo-line bg-kumo-elevated p-5"><h2 className="text-base font-semibold text-kumo-default">Tipografía</h2><p className="mt-1 text-sm text-kumo-subtle">Las fuentes se cargan desde Google Fonts en el sitio público.</p><div className="mt-5 grid gap-4 sm:grid-cols-2">{([['headingFont', 'Títulos'], ['bodyFont', 'Contenido']] as const).map(([key, label]) => <label key={key} className="block"><span className="text-sm font-medium text-kumo-default">{label}</span><select value={settings[key]} onChange={(event) => update(key, event.target.value)} className="mt-2 h-10 w-full rounded-md border border-kumo-line bg-kumo-default px-3 text-sm text-kumo-default outline-none focus:border-kumo-accent">{fontOptions.map((font) => <option key={font} value={font} style={{ color: "#111827", backgroundColor: "#FFFFFF" }}>{font}</option>)}</select></label>)}</div></section>
+				<section className={PANEL}>
+					<h2 className="text-base font-semibold text-kumo-default">Colores</h2>
+					<p className="mt-1 text-sm text-kumo-subtle">Usa valores hexadecimales de seis dígitos.</p>
+					<div className="mt-5 grid gap-4 sm:grid-cols-2">
+						{colors.map(({ key, label, description }) => (
+							<label key={key} className="block">
+								<span className="text-sm font-medium text-kumo-default">{label}</span>
+								<span className="mt-0.5 block text-xs text-kumo-subtle">{description}</span>
+								<span className="mt-2 flex h-10 overflow-hidden rounded-lg border border-kumo-line bg-kumo-elevated">
+									<input aria-label={`Selector de ${label}`} type="color" value={settings[key]} onChange={(event) => update(key, event.target.value)} className="h-full w-12 cursor-pointer border-0 bg-transparent p-1" />
+									<input aria-label={label} value={settings[key]} onChange={(event) => update(key, event.target.value)} pattern="#[0-9A-Fa-f]{6}" className="min-w-0 flex-1 border-0 bg-transparent px-3 font-mono text-sm text-kumo-default outline-none" />
+								</span>
+							</label>
+						))}
+					</div>
+				</section>
+				<section className={PANEL}>
+					<h2 className="text-base font-semibold text-kumo-default">Tipografía</h2>
+					<p className="mt-1 text-sm text-kumo-subtle">Las fuentes se cargan desde Google Fonts en el sitio público.</p>
+					<div className="mt-5 grid gap-4 sm:grid-cols-2">
+						{([["headingFont", "Títulos"], ["bodyFont", "Contenido"]] as const).map(([key, label]) => (
+							<label key={key} className="block">
+								<span className="text-sm font-medium text-kumo-default">{label}</span>
+								<select value={settings[key]} onChange={(event) => update(key, event.target.value)} className={FIELD}>
+									{fontOptions.map((font) => <option key={font} value={font}>{font}</option>)}
+								</select>
+							</label>
+						))}
+					</div>
+				</section>
 			</div>
-			<aside className="lg:sticky lg:top-6 lg:self-start"><div className="rounded-lg border border-kumo-line p-5" style={{ background: settings.panelColor, borderColor: settings.borderColor, color: settings.textColor }}><span className="text-xs font-medium uppercase tracking-widest" style={{ color: settings.accentColor, fontFamily: settings.bodyFont }}>Vista previa</span><h2 className="mt-5 text-2xl font-semibold" style={{ fontFamily: settings.headingFont }}>Una nueva partida</h2><p className="mt-3 text-sm leading-6" style={{ color: settings.mutedColor, fontFamily: settings.bodyFont }}>Así se verán los títulos, el contenido y los detalles principales de tu blog.</p><button type="button" className="mt-5 rounded-md px-3 py-2 text-sm font-medium text-white" style={{ background: settings.primaryColor, fontFamily: settings.bodyFont }}>Leer publicación</button></div></aside>
+			<aside className="lg:sticky lg:top-6 lg:self-start">
+				<div className="rounded-lg border border-kumo-line p-5" style={{ background: settings.panelColor, borderColor: settings.borderColor, color: settings.textColor }}>
+					<span className="text-xs font-medium uppercase tracking-widest" style={{ color: settings.accentColor, fontFamily: settings.bodyFont }}>Vista previa</span>
+					<h2 className="mt-5 text-2xl font-semibold" style={{ fontFamily: settings.headingFont }}>Una nueva partida</h2>
+					<p className="mt-3 text-sm leading-6" style={{ color: settings.mutedColor, fontFamily: settings.bodyFont }}>Así se verán los títulos, el contenido y los detalles principales de tu blog.</p>
+					<button type="button" className="mt-5 rounded-md px-3 py-2 text-sm font-medium text-white" style={{ background: settings.primaryColor, fontFamily: settings.bodyFont }}>Leer publicación</button>
+				</div>
+			</aside>
 		</div>
 	</div>;
 }

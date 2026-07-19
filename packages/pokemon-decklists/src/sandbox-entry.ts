@@ -8,7 +8,7 @@ import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
 import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.8.5";
+const VERSION = "0.8.7";
 const tournamentCategories = [
 	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
 	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
@@ -133,6 +133,27 @@ export default definePlugin({
 			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
 				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
 				return saveArchetypeFromEditor(values, ctx);
+			},
+		},
+		"tournaments/save": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
+				return persistTournament(values, ctx);
+			},
+		},
+		"rounds/save": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
+				return persistRound(values, ctx);
+			},
+		},
+		"rounds/delete": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
+				const id = String(values.id ?? "").trim();
+				if (!id) return { ok: false, error: "Falta el id de la ronda" };
+				await ctx.storage.matches!.delete(id);
+				return { ok: true };
 			},
 		},
 		tournaments: {
@@ -368,50 +389,81 @@ async function saveDeckFromEditor(values: Record<string, unknown>, ctx: PluginCo
 }
 
 async function saveTournament(values: Record<string, unknown>, ctx: PluginContext) {
+	const saved = await persistTournament(values, ctx);
+	if (!saved.ok) return renderResults(ctx, { error: saved.error });
+	if (optional(values.id)) return renderResults(ctx, { message: "Torneo actualizado" });
+	return renderRoundEditor(ctx, saved.tournament.id, undefined, { message: "Torneo creado; ahora registra la primera ronda" });
+}
+
+async function persistTournament(values: Record<string, unknown>, ctx: PluginContext) {
 	const deckId = String(values.deckId ?? "");
 	const deck = await ctx.storage.decks!.get(deckId) as Decklist | null;
-	if (!deck) return renderResults(ctx, { error: "Selecciona un decklist" });
-	const name = String(values.eventName ?? "").trim();
+	if (!deck) return { ok: false as const, error: "Selecciona un decklist" };
+	const name = String(values.eventName ?? values.name ?? "").trim();
 	const playedAt = String(values.playedAt ?? "").trim();
-	if (!name || !playedAt) return renderResults(ctx, { error: "Indica el nombre y la fecha del torneo" });
+	if (!name || !playedAt) return { ok: false as const, error: "Indica el nombre y la fecha del torneo" };
 	const existingId = optional(values.id);
 	const existing = existingId ? await ctx.storage.tournaments!.get(existingId) as TournamentResult | null : null;
 	const id = existing?.id ?? crypto.randomUUID();
 	const now = new Date().toISOString();
-	const tournament: TournamentResult = { id, deckId, deckRevisionId: deck.updatedAt, name, playedAt, endedAt: optional(values.endedAt), category: asTournamentCategory(values.category), format: asFormat(values.format), placement: optional(values.placement), notes: optional(values.notes), visibility: values.visibility === "private" ? "private" : "public", createdAt: existing?.createdAt ?? now, updatedAt: now };
+	const tournament: TournamentResult = {
+		id, deckId, deckRevisionId: deck.updatedAt, name, playedAt,
+		endedAt: optional(values.endedAt), category: asTournamentCategory(values.category),
+		format: asFormat(values.format), placement: optional(values.placement), notes: optional(values.notes),
+		visibility: values.visibility === "private" ? "private" : "public",
+		createdAt: existing?.createdAt ?? now, updatedAt: now,
+	};
 	await ctx.storage.tournaments!.put(id, tournament);
 	if (existing) {
 		const rounds = await listRounds(ctx);
-		await Promise.all(rounds.filter((round) => round.tournamentId === id).map((round) => ctx.storage.matches!.put(round.id, { ...round, deckId, deckRevisionId: deck.updatedAt, playedAt, eventName: name, visibility: tournament.visibility })));
-		return renderResults(ctx, { message: "Torneo actualizado" });
+		await Promise.all(rounds.filter((round) => round.tournamentId === id).map((round) =>
+			ctx.storage.matches!.put(round.id, { ...round, deckId, deckRevisionId: deck.updatedAt, playedAt, eventName: name, visibility: tournament.visibility }),
+		));
 	}
-	return renderRoundEditor(ctx, id, undefined, { message: "Torneo creado; ahora registra la primera ronda" });
+	return { ok: true as const, tournament };
 }
 
 async function saveRound(values: Record<string, unknown>, ctx: PluginContext) {
+	const saved = await persistRound(values, ctx);
+	if (!saved.ok) return renderRoundEditor(ctx, String(values.tournamentId ?? ""), undefined, { error: saved.error });
+	return renderResults(ctx, { message: `Ronda ${saved.match.round} guardada` });
+}
+
+async function persistRound(values: Record<string, unknown>, ctx: PluginContext) {
 	const tournamentId = String(values.tournamentId ?? "");
 	const tournament = await ctx.storage.tournaments!.get(tournamentId) as TournamentResult | null;
-	if (!tournament) return renderResults(ctx, { error: "No se encontró el torneo" });
+	if (!tournament) return { ok: false as const, error: "No se encontró el torneo" };
 	const round = Math.max(1, Number(values.round ?? 1));
 	const existingId = optional(values.id);
 	const rounds = await listRounds(ctx);
-	if (rounds.some((item) => item.tournamentId === tournamentId && item.round === round && item.id !== existingId)) return renderRoundEditor(ctx, tournamentId, undefined, { error: `La ronda ${round} ya existe` });
+	if (rounds.some((item) => item.tournamentId === tournamentId && item.round === round && item.id !== existingId)) {
+		return { ok: false as const, error: `La ronda ${round} ya existe` };
+	}
 	const specialOutcome = asSpecialOutcome(values.specialOutcome);
 	const opponentPokemon = specialOutcome ? [] : await resolveOpponentPokemon(values, ctx);
-	if (!specialOutcome && !opponentPokemon.length) return renderRoundEditor(ctx, tournamentId, undefined, { error: "Selecciona al menos un Pokémon del arquetipo rival" });
+	if (!specialOutcome && !opponentPokemon.length) return { ok: false as const, error: "Selecciona al menos un Pokémon del arquetipo rival" };
 	const games = specialOutcome ? [] : [1, 2, 3].flatMap((game) => {
 		const result = asGameResult(values[`game${game}Result`]);
 		if (!result) return [];
 		const order = String(values[`game${game}Order`] ?? "unknown");
 		return [{ result, wentFirst: order === "first" ? true : order === "second" ? false : undefined }];
 	});
-	if (!specialOutcome && !games.length) return renderRoundEditor(ctx, tournamentId, undefined, { error: "Registra el resultado de al menos una partida" });
+	if (!specialOutcome && !games.length) return { ok: false as const, error: "Registra el resultado de al menos una partida" };
 	const result = roundResult(games, specialOutcome);
 	const id = existingId ?? crypto.randomUUID();
 	const opponentArchetype = opponentPokemon.map((pokemon) => pokemon.name).join(" / ") || labelSpecialOutcome(specialOutcome);
-	const match: MatchResult = { id, tournamentId, deckId: tournament.deckId, deckRevisionId: tournament.deckRevisionId, playedAt: tournament.playedAt, eventName: tournament.name, round, opponentArchetype, opponentPokemon, result, games, gamesWon: games.filter((game) => game.result === "win").length, gamesLost: games.filter((game) => game.result === "loss").length, gamesDrawn: games.filter((game) => game.result === "draw").length, specialOutcome, notes: optional(values.notes), visibility: tournament.visibility };
+	const videoUrl = normalizeVideoUrl(values.videoUrl);
+	const match: MatchResult = {
+		id, tournamentId, deckId: tournament.deckId, deckRevisionId: tournament.deckRevisionId,
+		playedAt: tournament.playedAt, eventName: tournament.name, round, opponentArchetype, opponentPokemon,
+		result, games,
+		gamesWon: games.filter((game) => game.result === "win").length,
+		gamesLost: games.filter((game) => game.result === "loss").length,
+		gamesDrawn: games.filter((game) => game.result === "draw").length,
+		specialOutcome, videoUrl, notes: optional(values.notes), visibility: tournament.visibility,
+	};
 	await ctx.storage.matches!.put(id, match);
-	return renderResults(ctx, { message: `Ronda ${round} guardada` });
+	return { ok: true as const, match };
 }
 
 async function renderAdmin(ctx: any, notice: Notice = {}) {
@@ -583,6 +635,7 @@ async function renderRoundEditor(ctx: any, tournamentId: string, match?: MatchRe
 		{ type: "combobox", action_id: "opponentSecondaryPokemon", label: "Segundo Pokémon rival (opcional)", placeholder: "Buscar otro Pokémon…", options: pokemonOptions, initial_value: pokemonSelection(match?.opponentPokemon?.[1]) },
 		{ type: "select", action_id: "specialOutcome", label: "Resultado especial", options: [{ label: "Partida normal", value: "normal" }, { label: "BYE", value: "bye" }, { label: "Rival ausente", value: "no-show" }, { label: "Empate intencional", value: "intentional-draw" }], initial_value: match?.specialOutcome ?? "normal" },
 		...gameFields(match),
+		{ type: "text_input", action_id: "videoUrl", label: "Video (opcional)", placeholder: "https://youtube.com/watch?v=…", initial_value: match?.videoUrl },
 		{ type: "text_input", action_id: "notes", label: "Notas de la ronda", multiline: true, initial_value: match?.notes },
 	], submit: { label: match ? "Guardar cambios" : "Guardar ronda", action_id: `save_round:${tournamentId}:${match?.id ?? ""}` } });
 	return response(blocks, notice);
@@ -709,6 +762,17 @@ function asFormat(value: unknown): Decklist["format"] { return ["standard", "exp
 function asBool(value: unknown) { return value === true || value === "true" || value === "on" || value === 1 || value === "1"; }
 function asTournamentCategory(value: unknown): TournamentResult["category"] { return tournamentCategories.some((category) => category.value === String(value)) ? String(value) as TournamentResult["category"] : "other"; }
 function optional(value: unknown) { const text = String(value ?? "").trim(); return text || undefined; }
+function normalizeVideoUrl(value: unknown) {
+	const text = String(value ?? "").trim();
+	if (!text) return undefined;
+	try {
+		const url = new URL(text.startsWith("http") ? text : `https://${text}`);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+		return url.toString();
+	} catch {
+		return undefined;
+	}
+}
 function optionalNumber(value: unknown) { return value === "" || value === undefined || value === null ? undefined : Number(value); }
 function labelResult(value: MatchResult["result"]) { return value === "win" ? "Victoria" : value === "loss" ? "Derrota" : "Empate"; }
 function slugify(value: string) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "sin-arquetipo"; }

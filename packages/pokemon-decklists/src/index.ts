@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.8.5";
+const VERSION = "0.8.7";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {

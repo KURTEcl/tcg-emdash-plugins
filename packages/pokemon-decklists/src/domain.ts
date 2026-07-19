@@ -76,6 +76,8 @@ export interface MatchResult {
 	wentFirst?: boolean;
 	eventName?: string;
 	round?: number;
+	/** Optional VOD / YouTube (or other) link for this round. */
+	videoUrl?: string;
 	notes?: string;
 	visibility: "public" | "private";
 }

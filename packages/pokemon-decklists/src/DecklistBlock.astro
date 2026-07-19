@@ -47,6 +47,10 @@ const sprites = (deck?.archetypePokemon ?? []).slice(0, 2).flatMap((pokemon) => 
 	const id = pokemon.spriteId ?? pokemon.speciesId;
 	return id ? [{ ...pokemon, url: `https://cdn.tcghub.cl/sprites/sprites/pokemon/${id}.png` }] : [];
 });
+const opponentSprites = (match: MatchResult) => (match.opponentPokemon ?? []).slice(0, 2).flatMap((pokemon) => {
+	const id = pokemon.spriteId ?? pokemon.speciesId;
+	return id ? [{ name: pokemon.name, url: `https://cdn.tcghub.cl/sprites/sprites/pokemon/${id}.png` }] : [];
+});
 ---
 
 {deck ? (
@@ -77,8 +81,23 @@ const sprites = (deck?.archetypePokemon ?? []).slice(0, 2).flatMap((pokemon) => 
 		{node.showResults && stats.total > 0 && (
 			<section class="tcg-results">
 				<div class="tcg-results__summary"><strong>{stats.winRate}%</strong><span>win rate · {stats.total} rondas</span></div>
-				<div class="tcg-results__numbers"><span>{stats.wins} V</span><span>{stats.losses} D</span><span>{stats.draws} E</span></div>
-				<ul>{matches.slice(0, 8).map((match) => <li><span>{match.playedAt}{match.eventName ? ` · ${match.eventName}` : ""}{match.round ? ` · R${match.round}` : ""}{match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}</span><strong class={`is-${match.result}`}>{match.result === "win" ? "Victoria" : match.result === "loss" ? "Derrota" : "Empate"}</strong></li>)}</ul>
+				<div class="tcg-results__numbers"><span>{stats.wins} W</span><span>{stats.losses} L</span><span>{stats.draws} T</span></div>
+				<ul>{matches.slice(0, 8).map((match) => {
+					const rivals = opponentSprites(match);
+					return <li>
+						<span class="tcg-results__row">
+							{rivals.length > 0 && <span class="tcg-results__sprites" title={match.opponentArchetype}>{rivals.map((sprite) => <img src={sprite.url} alt={sprite.name} title={sprite.name} width="28" height="28" loading="lazy" />)}</span>}
+							<span>
+								{match.tournamentId
+									? <a class="tcg-results__event" href={`/results/${match.tournamentId}`}>{match.eventName ?? "Torneo"}</a>
+									: (match.eventName ?? match.playedAt)}
+								{match.round ? ` · R${match.round}` : ""}
+								{match.videoUrl ? <> · <a class="tcg-results__video" href={match.videoUrl} target="_blank" rel="noopener noreferrer">Ver video</a></> : null}
+							</span>
+						</span>
+						<strong class={`is-${match.result}`}>{match.result === "win" ? "W" : match.result === "loss" ? "L" : "T"}</strong>
+					</li>;
+				})}</ul>
 			</section>
 		)}
 	</section>
@@ -186,8 +205,13 @@ const sprites = (deck?.archetypePokemon ?? []).slice(0, 2).flatMap((pokemon) => 
 	.tcg-results__summary strong { font-size: 2rem; }
 	.tcg-results__numbers { display: flex; gap: .8rem; margin: .45rem 0 1rem; opacity: .65; }
 	.tcg-results ul { list-style: none; margin: 0; padding: 0; }
-	.tcg-results li { display: flex; justify-content: space-between; gap: 1rem; padding: .65rem 0; border-top: 1px solid var(--deck-line); font-size: .82rem; }
+	.tcg-results li { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: .65rem 0; border-top: 1px solid var(--deck-line); font-size: .82rem; }
+	.tcg-results__row { display: inline-flex; align-items: center; gap: .55rem; min-width: 0; }
+	.tcg-results__sprites { display: inline-flex; align-items: center; flex: 0 0 auto; }
+	.tcg-results__sprites img { width: 28px; height: 28px; object-fit: contain; }
+	.tcg-results__sprites img + img { margin-left: -.45rem; }
 	.tcg-results .is-win { color: #39a96b; } .tcg-results .is-loss { color: #d85b5b; }
+	.tcg-results__event, .tcg-results__video { color: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: .15em; }
 	.tcg-deck--empty { padding: 1.25rem; }
 	@media (max-width: 760px) { .tcg-deck__cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 	@media (max-width: 600px) { .tcg-deck { margin-inline: -.5rem; border-radius: .85rem; } .tcg-deck__header { padding: .7rem .75rem; } .tcg-deck__sprite { width: 38px; height: 38px; } .tcg-deck__sprites img:nth-child(2) { display: none; } .tcg-deck__cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .25rem; } .tcg-deck__panel { padding: .25rem .5rem .5rem; } .tcg-card-modal__body { grid-template-columns: 1fr; } .tcg-card-modal__media { min-height: 0; } .tcg-card-modal__media :global(img) { max-height: 55dvh; } }
