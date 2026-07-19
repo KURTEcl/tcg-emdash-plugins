@@ -1,0 +1,25 @@
+{
+	"name": "@tcg-emdash/plugin-pokemon-decklists",
+	"version": "0.1.0",
+	"description": "Pokémon TCG decklists, archetypes and match results for EmDash",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./sandbox": "./src/sandbox-entry.ts"
+	},
+	"files": ["src", "README.md"],
+	"scripts": {
+		"build": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run"
+	},
+	"keywords": ["emdash", "pokemon", "tcg", "decklist"],
+	"license": "MIT",
+	"peerDependencies": { "emdash": ">=0.28.0" },
+	"devDependencies": {
+		"emdash": "^0.28.1",
+		"tsdown": "^0.20.3",
+		"typescript": "^6.0.3",
+		"vitest": "^4.0.18"
+	}
+}
