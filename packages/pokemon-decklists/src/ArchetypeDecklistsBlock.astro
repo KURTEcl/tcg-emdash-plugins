@@ -1,0 +1,39 @@
+---
+import type { Decklist } from "./domain.js";
+
+interface Props { node: { archetypeId?: string; showCards?: boolean } }
+const { node } = Astro.props;
+let decks: Decklist[] = [];
+if (node.archetypeId) {
+	try {
+		const endpoint = new URL("/_emdash/api/plugins/pokemon-decklists/decks", Astro.url.origin);
+		endpoint.searchParams.set("archetypeId", node.archetypeId);
+		const response = await fetch(endpoint);
+		if (response.ok) { const body = await response.json(); decks = (body.data ?? body).items ?? []; }
+	} catch { /* Render the empty state. */ }
+}
+const categories = ["pokemon", "trainer", "energy"] as const;
+const categoryLabels = { pokemon: "Pokémon", trainer: "Entrenadores", energy: "Energías" };
+---
+
+<section class="archetype-decks">
+	<header><p>LISTAS DEL ARQUETIPO</p><h3>{decks[0]?.archetypeName ?? "Decklists"}</h3><span>{decks.length} {decks.length === 1 ? "lista" : "listas"}</span></header>
+	{decks.length ? (
+		<div class="table-wrap"><table>
+			<thead><tr><th>Lista</th><th>Formato</th>{categories.map((category) => <th>{categoryLabels[category]}</th>)}<th>Total</th></tr></thead>
+			<tbody>{decks.map((deck) => <tr><th>{deck.name}</th><td>{deck.format.toUpperCase()}</td>{categories.map((category) => <td>{deck.cards.filter((card) => card.category === category).reduce((sum, card) => sum + card.quantity, 0)}</td>)}<td>{deck.totalCards}</td></tr>)}</tbody>
+		</table></div>
+	) : <p class="empty">Todavía no hay decklists para este arquetipo.</p>}
+	{node.showCards !== false && decks.map((deck) => (
+		<details><summary>{deck.name} · ver composición</summary><div class="cards">{categories.map((category) => <section><h4>{categoryLabels[category]}</h4><ul>{deck.cards.filter((card) => card.category === category).map((card) => <li><strong>{card.quantity}×</strong> {card.displayPrinting.name}</li>)}</ul></section>)}</div></details>
+	))}
+</section>
+
+<style>
+	.archetype-decks { margin: 2.5rem 0; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 1.25rem; overflow: hidden; }
+	header { padding: 1.4rem clamp(1rem,4vw,2rem); display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+	header p { width: 100%; margin: 0; font-size: .7rem; letter-spacing: .14em; opacity: .6; } h3 { margin: 0; font-size: 1.5rem; } header span { opacity: .58; font-size: .82rem; }
+	.table-wrap { overflow-x: auto; border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent); } table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: .82rem; } th,td { padding: .8rem 1rem; text-align: left; border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); } thead th { font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; opacity: .62; } tbody th { font-weight: 650; }
+	details { border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); } summary { cursor: pointer; padding: .9rem clamp(1rem,4vw,2rem); font-size: .82rem; } .cards { padding: 0 clamp(1rem,4vw,2rem) 1.25rem; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1rem; } h4 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; } ul { list-style: none; padding: 0; margin: 0; font-size: .75rem; line-height: 1.6; } .empty { padding: 0 2rem 1.5rem; opacity: .65; }
+	@media(max-width:600px){ .archetype-decks { margin-inline: -.5rem; } .cards { grid-template-columns: 1fr; } }
+</style>

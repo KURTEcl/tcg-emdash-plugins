@@ -14,4 +14,7 @@ Plugin de EmDash para importar listas de Pokémon TCG desde PTCG Live o Limitles
 - Rondas editables con arquetipo rival seleccionable desde PokéAPI, hasta tres partidas y orden de inicio.
 - Casos especiales de torneo: BYE, rival ausente y empate intencional.
 - Estadísticas públicas calculadas por ronda, manteniendo compatibilidad con resultados anteriores.
+- Edición de torneos con rango de fechas, categoría, formato, posición y privacidad.
+- Bloque de tabla para mostrar todas las decklists de un arquetipo.
+- Buscador administrativo de cartas y bloque para insertarlas dentro del contenido.
 - API pública para consultar listas y obtener su representación de texto.

@@ -79,6 +79,9 @@ export interface TournamentResult {
 	deckRevisionId: string;
 	name: string;
 	playedAt: string;
+	endedAt?: string;
+	category?: "league" | "challenge" | "cup" | "regional" | "international" | "online" | "casual" | "other";
+	format?: Decklist["format"];
 	placement?: string;
 	notes?: string;
 	visibility: "public" | "private";

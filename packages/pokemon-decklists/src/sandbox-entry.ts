@@ -4,10 +4,15 @@ import type { Archetype, ArchetypePokemon, DeckCard, Decklist, MatchResult, Tour
 import { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
 import { getArchetypePokemon, listPokemonOptions, type PokemonOption } from "./pokeapi.js";
 import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
-import { isBasicEnergy, resolveBasicPrinting, searchCards } from "./tcgdex.js";
+import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
+const tournamentCategories = [
+	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
+	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
+	{ label: "Casual", value: "casual" }, { label: "Otro", value: "other" },
+];
 
 export default definePlugin({
 	id: "pokemon-decklists",
@@ -27,6 +32,7 @@ export default definePlugin({
 				if (interaction.type === "block_action") return handleAction(interaction, ctx);
 				if (interaction.page === "/archetypes") return renderArchetypes(ctx);
 				if (interaction.page === "/results") return renderResults(ctx);
+				if (interaction.page === "/cards") return renderCardSearch(ctx);
 				return renderAdmin(ctx);
 			},
 		},
@@ -35,6 +41,15 @@ export default definePlugin({
 				const result = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 100 });
 				return { items: result.items.map((item) => { const deck = item.data as Decklist; return { id: deck.id, name: `${deck.name} · ${deck.archetypeName}` }; }) };
 			},
+		},
+		"archetype-options": {
+			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const result = await ctx.storage.archetypes!.query({ orderBy: { name: "asc" }, limit: 200 });
+				return { items: result.items.map((item) => { const archetype = item.data as Archetype; return { id: archetype.id, name: archetype.name }; }) };
+			},
+		},
+		"card-options": {
+			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => ({ items: (await ctx.kv.get<Array<{ id: string; name: string }>>("recent-card-options")) ?? [] }),
 		},
 		archetypes: {
 			public: true,
@@ -46,10 +61,35 @@ export default definePlugin({
 		decks: {
 			public: true,
 			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
-				const id = new URL(routeCtx.request.url).searchParams.get("id");
+				const url = new URL(routeCtx.request.url);
+				const id = url.searchParams.get("id");
 				if (id) return await ctx.storage.decks!.get(id);
 				const result = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 100 });
-				return { items: result.items.map((item: { data: unknown }) => item.data), cursor: result.cursor, hasMore: result.hasMore };
+				const archetypeId = url.searchParams.get("archetypeId");
+				const items = result.items.map((item) => item.data as Decklist).filter((deck) => !archetypeId || deck.archetypeId === archetypeId);
+				return { items, cursor: result.cursor, hasMore: result.hasMore };
+			},
+		},
+		tournaments: {
+			public: true,
+			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const result = await ctx.storage.tournaments!.query({ orderBy: { playedAt: "desc" }, limit: 200 });
+				return { items: result.items.map((item) => item.data as TournamentResult).filter((tournament) => tournament.visibility === "public") };
+			},
+		},
+		"cards/display": {
+			public: true,
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const url = new URL(routeCtx.request.url);
+				const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? "en";
+				const cardId = url.searchParams.get("id")?.trim();
+				if (cardId) {
+					const selected = await getCard((request, init) => ctx.http!.fetch(String(request), init), language, cardId);
+					return selected ? { status: "exact", selected } : { status: "unresolved" };
+				}
+				const name = url.searchParams.get("name")?.trim();
+				if (!name) throw new Response("Nombre requerido", { status: 400 });
+				return resolveBasicPrinting((request, init) => ctx.http!.fetch(String(request), init), language, name, url.searchParams.get("number") ?? undefined, url.searchParams.get("set") ?? undefined, url.searchParams.get("format") ?? "standard");
 			},
 		},
 		"decks/text": {
@@ -104,6 +144,7 @@ async function handleForm(interaction: Interaction, ctx: PluginContext) {
 	if (interaction.action_id === "import_deck" || interaction.action_id === "update_deck") return saveDeck(interaction.action_id, interaction.values, ctx);
 	if (interaction.action_id === "save_tournament") return saveTournament(interaction.values, ctx);
 	if (interaction.action_id === "save_round") return saveRound(interaction.values, ctx);
+	if (interaction.action_id === "search_cards") return renderCardSearch(ctx, optional(interaction.values.query));
 	return renderAdmin(ctx);
 }
 
@@ -134,6 +175,7 @@ async function handleAction(interaction: Interaction, ctx: PluginContext) {
 		return renderResults(ctx, { message: "Resultado eliminado" });
 	}
 	if (interaction.action_id === "add_round") return renderRoundEditor(ctx, id);
+	if (interaction.action_id === "edit_tournament") return renderTournamentEditor(ctx, id);
 	if (interaction.action_id === "edit_round") {
 		const round = await ctx.storage.matches!.get(id) as MatchResult | null;
 		return round?.tournamentId ? renderRoundEditor(ctx, round.tournamentId, round) : renderResults(ctx, { error: "No se encontró la ronda" });
@@ -179,10 +221,17 @@ async function saveTournament(values: Record<string, unknown>, ctx: PluginContex
 	const name = String(values.eventName ?? "").trim();
 	const playedAt = String(values.playedAt ?? "").trim();
 	if (!name || !playedAt) return renderResults(ctx, { error: "Indica el nombre y la fecha del torneo" });
-	const id = crypto.randomUUID();
+	const existingId = optional(values.id);
+	const existing = existingId ? await ctx.storage.tournaments!.get(existingId) as TournamentResult | null : null;
+	const id = existing?.id ?? crypto.randomUUID();
 	const now = new Date().toISOString();
-	const tournament: TournamentResult = { id, deckId, deckRevisionId: deck.updatedAt, name, playedAt, placement: optional(values.placement), notes: optional(values.notes), visibility: values.visibility === "private" ? "private" : "public", createdAt: now, updatedAt: now };
+	const tournament: TournamentResult = { id, deckId, deckRevisionId: deck.updatedAt, name, playedAt, endedAt: optional(values.endedAt), category: asTournamentCategory(values.category), format: asFormat(values.format), placement: optional(values.placement), notes: optional(values.notes), visibility: values.visibility === "private" ? "private" : "public", createdAt: existing?.createdAt ?? now, updatedAt: now };
 	await ctx.storage.tournaments!.put(id, tournament);
+	if (existing) {
+		const rounds = await listRounds(ctx);
+		await Promise.all(rounds.filter((round) => round.tournamentId === id).map((round) => ctx.storage.matches!.put(round.id, { ...round, deckId, deckRevisionId: deck.updatedAt, playedAt, eventName: name, visibility: tournament.visibility })));
+		return renderResults(ctx, { message: "Torneo actualizado" });
+	}
 	return renderRoundEditor(ctx, id, undefined, { message: "Torneo creado; ahora registra la primera ronda" });
 }
 
@@ -262,6 +311,24 @@ async function renderArchetypes(ctx: any, notice: Notice = {}) {
 	return response(blocks, notice);
 }
 
+async function renderCardSearch(ctx: any, query?: string, notice: Notice = {}) {
+	const blocks: any[] = [{ type: "header", text: "Buscar cartas Pokémon" }, { type: "section", text: "Busca por nombre. Los resultados quedarán disponibles en el selector del bloque **Carta Pokémon** dentro del editor de publicaciones." }];
+	addNotice(blocks, notice);
+	blocks.push({ type: "form", block_id: "card-search", fields: [{ type: "text_input", action_id: "query", label: "Nombre de la carta", placeholder: "Zoroark, Rare Candy, Energy…", initial_value: query }], submit: { label: "Buscar en TCGDex", action_id: "search_cards" } });
+	if (!query) return response(blocks, notice);
+	try {
+		const language = (await ctx.kv.get("settings:cardLanguage") as string | null) ?? "en";
+		const cards = await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, query);
+		await ctx.kv.set("recent-card-options", cards.map((card) => ({ id: card.id, name: `${card.name} · ${card.id}` })));
+		if (!cards.length) blocks.push({ type: "banner", title: "Sin resultados", description: "Prueba con una parte más corta del nombre.", variant: "alert" });
+		for (const card of cards.slice(0, 20)) {
+			if (card.image) blocks.push({ type: "image", url: `${card.image}/low.webp`, alt: card.name });
+			blocks.push({ type: "section", text: `**${card.name}**\nID TCGDex: \`${card.id}\` · número ${card.localId}` });
+		}
+	} catch { blocks.push({ type: "banner", title: "No se pudo consultar TCGDex", variant: "error" }); }
+	return response(blocks, notice);
+}
+
 async function renderResults(ctx: any, notice: Notice = {}) {
 	const [decksResult, tournamentsResult, matchesResult] = await Promise.all([ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 100 }), ctx.storage.tournaments.query({ orderBy: { playedAt: "desc" }, limit: 100 }), ctx.storage.matches.query({ orderBy: { playedAt: "desc" }, limit: 200 })]);
 	const decks = decksResult.items.map((item: { data: Decklist }) => item.data);
@@ -270,14 +337,7 @@ async function renderResults(ctx: any, notice: Notice = {}) {
 	const blocks: any[] = [{ type: "header", text: "Torneos y resultados" }, { type: "section", text: "Crea un torneo con su fecha y decklist. Luego registra cada ronda, el arquetipo rival y el resultado de sus partidas, siguiendo el modelo de Training Court." }];
 	addNotice(blocks, notice);
 	if (!decks.length) blocks.push({ type: "banner", title: "Primero importa un decklist", variant: "alert" });
-	else blocks.push({ type: "form", block_id: "tournament-form", fields: [
-		{ type: "select", action_id: "deckId", label: "Decklist", options: decks.map((deck: Decklist) => ({ label: deck.name, value: deck.id })) },
-		{ type: "text_input", action_id: "eventName", label: "Nombre del torneo", placeholder: "League Challenge, Regional…" },
-		{ type: "date_input", action_id: "playedAt", label: "Fecha del torneo", initial_value: new Date().toISOString().slice(0, 10) },
-		{ type: "text_input", action_id: "placement", label: "Posición final (opcional)", placeholder: "Top 8, 12.º…" },
-		{ type: "text_input", action_id: "notes", label: "Notas", multiline: true },
-		{ type: "select", action_id: "visibility", label: "Visibilidad", options: [{ label: "Público", value: "public" }, { label: "Privado", value: "private" }], initial_value: "public" },
-	], submit: { label: "Crear torneo y agregar rondas", action_id: "save_tournament" } });
+	else blocks.push(tournamentForm(decks));
 	const names = new Map(decks.map((deck: Decklist) => [deck.id, deck.name]));
 	for (const tournament of tournaments) {
 		const rounds = matches.filter((match) => match.tournamentId === tournament.id).sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
@@ -285,6 +345,7 @@ async function renderResults(ctx: any, notice: Notice = {}) {
 		blocks.push({ type: "section", text: `**${tournament.name}**\n${tournament.playedAt} · ${names.get(tournament.deckId) ?? "Decklist"}${tournament.placement ? ` · ${tournament.placement}` : ""} · ${stats.wins}-${stats.losses}-${stats.draws} · ${tournament.visibility}` });
 		blocks.push({ type: "actions", elements: [
 			{ type: "button", action_id: "add_round", label: "Agregar ronda", value: tournament.id },
+			{ type: "button", action_id: "edit_tournament", label: "Editar torneo", value: tournament.id },
 			{ type: "button", action_id: "delete_tournament", label: "Eliminar torneo", style: "danger", value: tournament.id, confirm: { title: "Eliminar torneo", text: "También se eliminarán todas sus rondas.", confirm: "Eliminar", deny: "Cancelar" } },
 		] });
 		for (const match of rounds) blocks.push({ type: "section", text: `Ronda ${match.round} · **${labelResult(match.result)}**${match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}${match.games?.length ? ` · ${match.games.map((game) => game.result[0].toUpperCase()).join("")}` : ""}`, accessory: { type: "button", action_id: "edit_round", label: "Editar", value: match.id } });
@@ -295,6 +356,28 @@ async function renderResults(ctx: any, notice: Notice = {}) {
 		for (const match of legacy) blocks.push({ type: "section", text: `**${labelResult(match.result)} · ${names.get(match.deckId) ?? "Decklist"}**\n${match.playedAt}${match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}${match.eventName ? ` · ${match.eventName}` : ""}`, accessory: { type: "button", action_id: "delete_result", label: "Eliminar", style: "danger", value: match.id } });
 	}
 	return response(blocks, notice);
+}
+
+async function renderTournamentEditor(ctx: any, id: string) {
+	const [tournament, decksResult] = await Promise.all([ctx.storage.tournaments.get(id), ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 100 })]);
+	if (!tournament) return renderResults(ctx, { error: "No se encontró el torneo" });
+	const decks: Decklist[] = decksResult.items.map((item: { data: Decklist }) => item.data);
+	return { blocks: [{ type: "header", text: `Editar torneo · ${tournament.name}` }, tournamentForm(decks, tournament)] };
+}
+
+function tournamentForm(decks: Decklist[], tournament?: TournamentResult) {
+	return { type: "form", block_id: tournament ? `tournament-${tournament.id}` : "tournament-form", fields: [
+		...(tournament ? [{ type: "text_input", action_id: "id", label: "ID del torneo (no modificar)", initial_value: tournament.id }] : []),
+		{ type: "select", action_id: "deckId", label: "Decklist", options: decks.map((deck) => ({ label: deck.name, value: deck.id })), initial_value: tournament?.deckId },
+		{ type: "text_input", action_id: "eventName", label: "Nombre del torneo", placeholder: "League Challenge, Regional…", initial_value: tournament?.name },
+		{ type: "date_input", action_id: "playedAt", label: "Fecha de inicio", initial_value: tournament?.playedAt ?? new Date().toISOString().slice(0, 10) },
+		{ type: "date_input", action_id: "endedAt", label: "Fecha de término (opcional)", initial_value: tournament?.endedAt },
+		{ type: "select", action_id: "category", label: "Categoría", options: tournamentCategories, initial_value: tournament?.category ?? "other" },
+		{ type: "select", action_id: "format", label: "Formato", options: [{ label: "Standard", value: "standard" }, { label: "Expanded", value: "expanded" }, { label: "GLC", value: "glc" }, { label: "Personalizado", value: "custom" }], initial_value: tournament?.format ?? "standard" },
+		{ type: "text_input", action_id: "placement", label: "Posición final (opcional)", placeholder: "Top 8, 12.º…", initial_value: tournament?.placement },
+		{ type: "text_input", action_id: "notes", label: "Notas", multiline: true, initial_value: tournament?.notes },
+		{ type: "select", action_id: "visibility", label: "Visibilidad", options: [{ label: "Público", value: "public" }, { label: "Privado", value: "private" }], initial_value: tournament?.visibility ?? "public" },
+	], submit: { label: tournament ? "Guardar torneo" : "Crear torneo y agregar rondas", action_id: "save_tournament" } };
 }
 
 async function renderRoundEditor(ctx: any, tournamentId: string, match?: MatchResult, notice: Notice = {}) {
@@ -392,6 +475,7 @@ async function getCachedPokemonOptions(ctx: PluginContext): Promise<PokemonOptio
 function addNotice(blocks: any[], notice: Notice) { if (notice.error) blocks.push({ type: "banner", title: "No se pudo completar", description: notice.error, variant: "error" }); if (notice.message) blocks.push({ type: "banner", title: notice.message, variant: "default" }); }
 function response(blocks: any[], notice: Notice) { return { blocks, ...(notice.message ? { toast: { message: notice.message, type: "success" } } : {}) }; }
 function asFormat(value: unknown): Decklist["format"] { return ["standard", "expanded", "glc", "custom"].includes(String(value)) ? String(value) as Decklist["format"] : "standard"; }
+function asTournamentCategory(value: unknown): TournamentResult["category"] { return tournamentCategories.some((category) => category.value === String(value)) ? String(value) as TournamentResult["category"] : "other"; }
 function optional(value: unknown) { const text = String(value ?? "").trim(); return text || undefined; }
 function optionalNumber(value: unknown) { return value === "" || value === undefined || value === null ? undefined : Number(value); }
 function labelResult(value: MatchResult["result"]) { return value === "win" ? "Victoria" : value === "loss" ? "Derrota" : "Empate"; }

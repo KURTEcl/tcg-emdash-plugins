@@ -9,6 +9,13 @@ export async function searchCards(fetcher: typeof fetch, language: string, name:
 	return await response.json() as Array<{ id: string; localId: string | number; name: string; image?: string }>;
 }
 
+export async function searchCardCatalog(fetcher: typeof fetch, language: string, query: string) {
+	const url = `${API_BASE}/${safeLanguage(language)}/cards?name=${encodeURIComponent(query)}`;
+	const response = await fetcher(url, { headers: { accept: "application/json" } });
+	if (!response.ok) throw new Error(`TCGDex respondió ${response.status}`);
+	return (await response.json() as Array<{ id: string; localId: string | number; name: string; image?: string }>).slice(0, 50);
+}
+
 export async function getCard(fetcher: typeof fetch, language: string, id: string) {
 	const response = await fetcher(`${API_BASE}/${safeLanguage(language)}/cards/${encodeURIComponent(id)}`, {
 		headers: { accept: "application/json" },
