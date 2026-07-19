@@ -24,7 +24,13 @@ export async function resolveBasicPrinting(
 	collectorNumber?: string,
 	format = "standard",
 ) {
-	const brief = await searchCards(fetcher, language, canonicalCardName(name));
+	const canonicalName = canonicalCardName(name);
+	const brief = await searchCards(fetcher, language, canonicalName);
+	if (canonicalName !== name) {
+		const preferred = brief.find((card) => card.id.startsWith("mee-")) ?? brief.find((card) => card.id.startsWith("sve-")) ?? brief.find((card) => card.image);
+		const selected = preferred ? await getCard(fetcher, language, preferred.id) : null;
+		if (selected) return { status: "basic-equivalent" as const, original: withoutCommercialData(selected), selected: withoutCommercialData(selected) };
+	}
 	const possibleOriginals = collectorNumber
 		? brief.filter((card) => equivalentCollectorNumber(card.localId, collectorNumber))
 		: brief;
