@@ -4,7 +4,7 @@ import type { Archetype, ArchetypePokemon, DeckCard, Decklist, MatchResult } fro
 import { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
 import { getArchetypePokemon, listPokemonOptions, type PokemonOption } from "./pokeapi.js";
 import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
-import { resolveBasicPrinting, searchCards } from "./tcgdex.js";
+import { isBasicEnergy, resolveBasicPrinting, searchCards } from "./tcgdex.js";
 
 const VERSION = "0.4.0";
 
@@ -250,7 +250,7 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext) {
 	let resolved = 0; let unresolved = 0;
 	const cards: DeckCard[] = [];
 	for (const card of deck.cards) {
-		if (card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
+		if (!isBasicEnergy(card.importedPrinting.name) && card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
 			cards.push(card); resolved++; continue;
 		}
 		try {
