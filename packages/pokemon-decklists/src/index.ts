@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
@@ -10,7 +10,7 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 		entrypoint: "@tcg-emdash/plugin-pokemon-decklists/sandbox",
 		options: {},
 		capabilities: ["network:request"],
-		allowedHosts: ["api.tcgdex.net"],
+		allowedHosts: ["api.tcgdex.net", "pokeapi.co"],
 		storage: {
 			archetypes: { indexes: ["name", "updatedAt"] },
 			decks: { indexes: ["archetypeId", "format", "createdAt"] },

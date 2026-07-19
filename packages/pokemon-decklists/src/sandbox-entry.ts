@@ -2,6 +2,7 @@ import { definePlugin } from "emdash";
 import type { PluginContext } from "emdash";
 import type { Archetype, ArchetypePokemon, Decklist } from "./domain.js";
 import { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
+import { getArchetypePokemon, listPokemonOptions, type PokemonOption } from "./pokeapi.js";
 import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
 import { resolveBasicPrinting, searchCards } from "./tcgdex.js";
 
@@ -10,7 +11,7 @@ import { resolveBasicPrinting, searchCards } from "./tcgdex.js";
 // single-context signature. Keep this cast at the package boundary only.
 export default definePlugin({
 	id: "pokemon-decklists",
-	version: "0.2.0",
+	version: "0.3.0",
 	capabilities: ["network:request"],
 	admin: {
 		settingsSchema: {
@@ -34,7 +35,7 @@ export default definePlugin({
 				if (interaction.type === "form_submit" && interaction.action_id === "save_archetype") {
 					const values = interaction.values ?? {};
 					const name = String(values.name ?? "").trim();
-					const pokemon = parseArchetypePokemon(values);
+					const pokemon = await resolveArchetypePokemon(values, ctx);
 					if (!name || !pokemon.length) return renderArchetypes(ctx, { error: "Indica un nombre y al menos un Pokémon válido" });
 					const id = slugify(name);
 					const existing = await ctx.storage.archetypes!.get(id) as Archetype | null;
@@ -176,10 +177,13 @@ async function renderAdmin(ctx: any, notice: { message?: string; error?: string 
 }
 
 async function renderArchetypes(ctx: any, notice: { message?: string; error?: string } = {}) {
-	const result = await ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 });
+	const [result, pokemonOptions] = await Promise.all([
+		ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 }),
+		getCachedPokemonOptions(ctx),
+	]);
 	const blocks: any[] = [
 		{ type: "header", text: "Arquetipos Pokémon" },
-		{ type: "section", text: "Crea arquetipos reutilizables para seleccionarlos al importar decklists. Formato Pokémon: Nombre|speciesId|spriteId. Para formas normales, spriteId es opcional. Ejemplo Mega Charizard X|6|10034." },
+		{ type: "section", text: "Crea arquetipos reutilizables para seleccionarlos al importar decklists. Busca por nombre; las especies y formas Mega se identifican automáticamente." },
 	];
 	if (notice.error) blocks.push({ type: "banner", title: "No se pudo guardar", description: notice.error, variant: "error" });
 	if (notice.message) blocks.push({ type: "banner", title: notice.message, variant: "default" });
@@ -187,8 +191,8 @@ async function renderArchetypes(ctx: any, notice: { message?: string; error?: st
 		type: "form", block_id: "archetype-form",
 		fields: [
 			{ type: "text_input", action_id: "name", label: "Nombre del arquetipo", placeholder: "Mega Charizard X / Pidgeot ex" },
-			{ type: "text_input", action_id: "primaryPokemon", label: "Pokémon principal", placeholder: "Mega Charizard X|6|10034" },
-			{ type: "text_input", action_id: "secondaryPokemon", label: "Segundo Pokémon (opcional)", placeholder: "Pidgeot|18" },
+			{ type: "combobox", action_id: "primaryPokemon", label: "Pokémon principal", placeholder: "Buscar Zoroark, Charizard, Mega…", options: pokemonOptions },
+			{ type: "combobox", action_id: "secondaryPokemon", label: "Segundo Pokémon (opcional)", placeholder: "Buscar otro Pokémon…", options: pokemonOptions },
 		],
 		submit: { label: "Guardar arquetipo", action_id: "save_archetype" },
 	});
@@ -200,22 +204,22 @@ async function renderArchetypes(ctx: any, notice: { message?: string; error?: st
 	return { blocks, ...(notice.message ? { toast: { message: notice.message, type: "success" } } : {}) };
 }
 
-function parseArchetypePokemon(values: Record<string, unknown>): ArchetypePokemon[] {
-	const pokemon: ArchetypePokemon[] = [];
-	for (const [order, [value, role]] of [[values.primaryPokemon, "primary"], [values.secondaryPokemon, "secondary"]].entries()) {
-			const [name, speciesId, spriteId, form] = String(value ?? "").split("|").map((part) => part.trim());
-			if (name && Number.isInteger(Number(speciesId)) && Number(speciesId) > 0) {
-				pokemon.push({
-					speciesId: Number(speciesId),
-					spriteId: Number.isInteger(Number(spriteId)) && Number(spriteId) > 0 ? Number(spriteId) : Number(speciesId),
-					name,
-					...(form ? { form } : {}),
-					role: role as "primary" | "secondary",
-					order,
-				});
-			}
-	}
-	return pokemon;
+async function resolveArchetypePokemon(values: Record<string, unknown>, ctx: PluginContext) {
+	const selections = [[values.primaryPokemon, "primary"], [values.secondaryPokemon, "secondary"]] as const;
+	const pokemon = await Promise.all(selections.map(([value, role], order) => {
+		if (!value) return null;
+		return getArchetypePokemon((url, init) => ctx.http!.fetch(String(url), init), String(value), role, order);
+	}));
+	return pokemon.filter((item): item is ArchetypePokemon => item !== null);
+}
+
+async function getCachedPokemonOptions(ctx: PluginContext): Promise<PokemonOption[]> {
+	const cached = await ctx.kv.get<{ fetchedAt: string; items: PokemonOption[] }>("cache:pokeapi-options:v1");
+	const maxAge = 7 * 24 * 60 * 60 * 1000;
+	if (cached && Date.now() - Date.parse(cached.fetchedAt) < maxAge) return cached.items;
+	const items = await listPokemonOptions((url, init) => ctx.http!.fetch(String(url), init));
+	await ctx.kv.set("cache:pokeapi-options:v1", { fetchedAt: new Date().toISOString(), items });
+	return items;
 }
 
 function asFormat(value: unknown): Decklist["format"] {
