@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { isBasicEnergy, resolveBasicPrinting } from "../src/tcgdex.js";
+import { isBasicEnergy, resolveBasicPrinting, searchCards } from "../src/tcgdex.js";
+
+describe("searchCards", () => {
+	it("matches names case-insensitively without relying on eq:", async () => {
+		const fetcher = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			expect(url).not.toContain("eq%3A");
+			expect(url).not.toContain("eq:");
+			return Response.json([
+				{ id: "me01-056", localId: "056", name: "Alakazam", image: "https://img/a" },
+				{ id: "base5-1", localId: "1", name: "Dark Alakazam", image: "https://img/d" },
+			]);
+		};
+		const items = await searchCards(fetcher as typeof fetch, "en", "alakazam");
+		expect(items.map((card) => card.id)).toEqual(["me01-056"]);
+	});
+});
 
 describe("basic energy detection", () => {
 	it("recognizes Limitless and TCG Live basic energy names", () => {
@@ -35,24 +51,57 @@ describe("set disambiguation", () => {
 		expect(result.selected?.id).toBe("me02-083");
 	});
 
-	it("falls back to another Alakazam art when MEP 003 has no image", async () => {
+	it("falls back to the set reprint art when MEP 003 has no image", async () => {
+		const shared = {
+			name: "Alakazam",
+			category: "Pokemon",
+			hp: 140,
+			stage: "Stage2",
+			regulationMark: "I",
+			retreat: 1,
+			abilities: [{ type: "Ability", name: "Psychic Draw", effect: "Draw 3 cards." }],
+			attacks: [{ cost: ["Psychic"], name: "Powerful Hand", effect: "Place 2 damage counters..." }],
+		};
 		const cards = [
 			{ id: "mep-003", localId: "003", name: "Alakazam" },
-			{ id: "sv06-082", localId: "082", name: "Alakazam", image: "https://img/sv06" },
+			{ id: "me01-056", localId: "056", name: "Alakazam", image: "https://assets.tcgdex.net/en/me/me01/056" },
+			{ id: "base1-001", localId: "001", name: "Alakazam", image: "https://img/base" },
 		];
 		const fetcher = async (input: RequestInfo | URL) => {
 			const url = String(input);
 			if (url.includes("/cards?")) return Response.json(cards);
-			if (url.endsWith("/cards/mep-003")) return Response.json({ id: "mep-003", localId: "003", name: "Alakazam", category: "Pokemon", set: { id: "mep", name: "MEP" } });
-			if (url.endsWith("/cards/sv06-082")) return Response.json({ id: "sv06-082", localId: "082", name: "Alakazam", image: "https://img/sv06", category: "Pokemon", variants: { normal: true }, set: { id: "sv06", name: "Twilight Masquerade" } });
+			// Incomplete promo row (no evolveFrom/weaknesses/image) — real TCGdex shape
+			if (url.endsWith("/cards/mep-003")) {
+				return Response.json({ ...shared, id: "mep-003", localId: "003", rarity: "Promo", set: { id: "mep", name: "MEP" } });
+			}
+			if (url.endsWith("/cards/me01-056")) {
+				return Response.json({
+					...shared,
+					id: "me01-056",
+					localId: "056",
+					image: "https://assets.tcgdex.net/en/me/me01/056",
+					evolveFrom: "Kadabra",
+					weaknesses: [{ type: "Darkness", value: "×2" }],
+					variants: { normal: true, holo: true },
+					rarity: "Rare",
+					legal: { standard: true },
+					set: { id: "me01", name: "Mega Evolution" },
+				});
+			}
+			if (url.endsWith("/cards/base1-001")) {
+				return Response.json({
+					id: "base1-001", localId: "001", name: "Alakazam", category: "Pokemon", hp: 80,
+					image: "https://img/base", attacks: [{ name: "Confuse Ray" }], set: { id: "base1", name: "Base" },
+				});
+			}
 			if (url.endsWith("/sets/mep")) return Response.json({ abbreviation: { official: "MEP" } });
 			return new Response(null, { status: 404 });
 		};
 
 		const result = await resolveBasicPrinting(fetcher as typeof fetch, "en", "Alakazam", "003", "MEP", "standard", { category: "pokemon" });
 		expect(result.status).toBe("basic-equivalent");
-		expect(result.selected?.id).toBe("sv06-082");
-		expect(result.selected?.image).toBe("https://img/sv06");
+		expect(result.selected?.id).toBe("me01-056");
+		expect(result.selected?.image).toBe("https://assets.tcgdex.net/en/me/me01/056");
 	});
 
 	it("resolves trainers by name only", async () => {

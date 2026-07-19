@@ -24,21 +24,23 @@ export interface FunctionalCard {
 
 const premiumRarity = /illustration|secret|hyper|rainbow|shiny|gold|ultra rare|full art|promo/i;
 
+/**
+ * Gameplay identity for reprints / stamp promos.
+ * Omit evolveFrom/weaknesses/resistances: TCGdex promo rows often leave those blank
+ * while the set printing (e.g. mep-003 → me01-056) has the full text box.
+ */
 export function functionalFingerprint(card: FunctionalCard) {
 	return stableStringify({
 		name: card.name,
 		category: card.category,
 		hp: card.hp,
 		stage: card.stage,
-		evolveFrom: card.evolveFrom,
 		abilities: card.abilities,
 		attacks: card.attacks,
 		effect: card.effect,
 		trainerType: card.trainerType,
 		energyType: card.energyType,
 		retreat: card.retreat,
-		weaknesses: card.weaknesses,
-		resistances: card.resistances,
 		regulationMark: card.regulationMark,
 	});
 }

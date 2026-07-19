@@ -123,8 +123,8 @@ function RowActions({ label, onEdit, onDuplicate, onDelete, extra }: { label: st
 	return <div className="flex items-center justify-end gap-1">{extra}<IconButton label={`Editar ${label}`} onClick={onEdit}><PencilSimple size={17} /></IconButton>{onDuplicate && <IconButton label={`Duplicar ${label}`} onClick={onDuplicate}><Copy size={17} /></IconButton>}<IconButton danger label={`Eliminar ${label}`} onClick={onDelete}><Trash size={17} /></IconButton></div>;
 }
 
-function IconButton({ label, onClick, children, danger = false }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean }) {
-	return <button type="button" aria-label={label} title={label} onClick={onClick} className={`inline-flex size-8 items-center justify-center rounded-md hover:bg-kumo-tint ${danger ? "text-kumo-danger" : "text-kumo-subtle hover:text-kumo-default"}`}>{children}</button>;
+function IconButton({ label, onClick, children, danger = false, disabled = false, busy = false }: { label: string; onClick: () => void; children: React.ReactNode; danger?: boolean; disabled?: boolean; busy?: boolean }) {
+	return <button type="button" aria-label={label} title={label} disabled={disabled || busy} aria-busy={busy || undefined} onClick={onClick} className={`inline-flex size-8 items-center justify-center rounded-md hover:bg-kumo-tint disabled:pointer-events-none disabled:opacity-40 ${danger ? "text-kumo-danger" : "text-kumo-subtle hover:text-kumo-default"} ${busy ? "text-kumo-accent" : ""}`}>{busy ? <ArrowsClockwise size={17} className="animate-spin" /> : children}</button>;
 }
 
 function NoticeBanner({ notice }: { notice: Notice }) { return notice ? <div className={`mb-4 rounded-md border px-4 py-3 text-sm ${notice.type === "error" ? "border-kumo-danger/40 text-kumo-danger" : "border-kumo-line text-kumo-default"}`}>{notice.message}</div> : null; }
@@ -161,6 +161,8 @@ function printingKey(card: DeckCard) {
 	return [printing.name.trim().toLowerCase(), printing.setCode?.trim().toUpperCase() ?? "", printing.collectorNumber?.trim().replace(/^0+/, "") ?? ""].join("|");
 }
 
+type PokemonOption = { label: string; value: string };
+
 function DeckEditor({ deck, archetypes, onBack, onSaved, reload }: { deck?: Decklist; archetypes: Archetype[]; onBack: () => void; onSaved: (message: string) => void; reload: () => Promise<void> }) {
 	const [name, setName] = useState(deck?.name ?? "");
 	const [archetypeId, setArchetypeId] = useState(deck?.archetypeId ?? archetypes[0]?.id ?? "");
@@ -174,8 +176,52 @@ function DeckEditor({ deck, archetypes, onBack, onSaved, reload }: { deck?: Deck
 	const [saving, setSaving] = useState(false);
 	const [searching, setSearching] = useState(false);
 	const [notice, setNotice] = useState<Notice>(null);
+	const [creatingArchetype, setCreatingArchetype] = useState(false);
+	const [newArchName, setNewArchName] = useState("");
+	const [primaryPokemon, setPrimaryPokemon] = useState("");
+	const [secondaryPokemon, setSecondaryPokemon] = useState("");
+	const [pokemonOptions, setPokemonOptions] = useState<PokemonOption[]>([]);
+	const [pokemonFilter, setPokemonFilter] = useState("");
+	const [savingArchetype, setSavingArchetype] = useState(false);
 
 	const total = cards.reduce((sum, card) => sum + card.quantity, 0);
+	const filteredPokemon = useMemo(() => {
+		const needle = pokemonFilter.trim().toLowerCase();
+		const pool = needle ? pokemonOptions.filter((item) => item.label.toLowerCase().includes(needle)) : pokemonOptions;
+		return pool.slice(0, 80);
+	}, [pokemonOptions, pokemonFilter]);
+
+	const openCreateArchetype = async () => {
+		setCreatingArchetype(true);
+		setNotice(null);
+		if (pokemonOptions.length) return;
+		try {
+			const result = await request<{ items: PokemonOption[] }>("pokemon-options");
+			setPokemonOptions(result.items);
+		} catch { setNotice({ type: "error", message: "No se pudo cargar la lista de Pokémon" }); }
+	};
+
+	const createArchetype = async () => {
+		if (!newArchName.trim() || !primaryPokemon) {
+			setNotice({ type: "error", message: "Indica nombre y Pokémon principal" });
+			return;
+		}
+		setSavingArchetype(true); setNotice(null);
+		try {
+			const result = await request<{ ok: boolean; error?: string; archetype?: Archetype }>("archetypes/save", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: newArchName.trim(), primaryPokemon, secondaryPokemon: secondaryPokemon || undefined }),
+			});
+			if (!result.ok || !result.archetype) { setNotice({ type: "error", message: result.error || "No se pudo crear el arquetipo" }); return; }
+			setArchetypeId(result.archetype.id);
+			setCreatingArchetype(false);
+			setNewArchName(""); setPrimaryPokemon(""); setSecondaryPokemon(""); setPokemonFilter("");
+			await reload();
+			setNotice({ type: "success", message: `Arquetipo ${result.archetype.name} creado` });
+		} catch (cause) { setNotice({ type: "error", message: cause instanceof Error ? cause.message : "No se pudo crear el arquetipo" }); }
+		finally { setSavingArchetype(false); }
+	};
 
 	const runSearch = async () => {
 		const q = query.trim();
@@ -237,10 +283,37 @@ function DeckEditor({ deck, archetypes, onBack, onSaved, reload }: { deck?: Deck
 		<NoticeBanner notice={notice} />
 		<div className="grid gap-4 md:grid-cols-2">
 			<label className="block text-sm"><span className="mb-1 block font-medium">Nombre</span><input value={name} onChange={(e) => setName(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3" /></label>
-			<label className="block text-sm"><span className="mb-1 block font-medium">Arquetipo</span><select value={archetypeId} onChange={(e) => setArchetypeId(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3">{archetypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+			<div className="block text-sm">
+				<div className="mb-1 flex items-center justify-between gap-2">
+					<span className="font-medium">Arquetipo</span>
+					<button type="button" onClick={() => void openCreateArchetype()} className="text-xs font-medium text-kumo-accent hover:underline">+ Crear arquetipo</button>
+				</div>
+				<select value={archetypeId} onChange={(e) => setArchetypeId(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3">
+					{!archetypes.length && <option value="">Sin arquetipos — créalo con el botón</option>}
+					{archetypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+				</select>
+			</div>
 			<label className="block text-sm"><span className="mb-1 block font-medium">Formato</span><select value={format} onChange={(e) => setFormat(e.target.value as Decklist["format"])} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3"><option value="standard">Standard</option><option value="expanded">Expanded</option><option value="glc">GLC</option><option value="custom">Personalizado</option></select></label>
 			<label className="flex items-start gap-3 rounded-md border border-kumo-line bg-kumo-elevated p-3 text-sm"><input type="checkbox" checked={isArchetypeBase} onChange={(e) => setIsArchetypeBase(e.target.checked)} className="mt-0.5" /><span><strong className="block">Lista base del arquetipo</strong><span className="text-kumo-subtle">No aparece en /decklists ni en la tabla del arquetipo. Solo una base por arquetipo.</span></span></label>
 		</div>
+
+		{creatingArchetype && <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="presentation">
+			<button type="button" aria-label="Cerrar" className="absolute inset-0 bg-black/50" onClick={() => setCreatingArchetype(false)} />
+			<div role="dialog" aria-modal="true" aria-labelledby="new-archetype-title" className="relative z-10 w-full max-w-lg rounded-lg border border-kumo-line bg-kumo-base p-5 shadow-lg space-y-3" onKeyDown={(e) => { if (e.key === "Escape") setCreatingArchetype(false); }}>
+				<div><h2 id="new-archetype-title" className="text-lg font-semibold">Nuevo arquetipo</h2><p className="text-xs text-kumo-subtle">Se crea y queda seleccionado para esta decklist.</p></div>
+				{notice?.type === "error" && <p className="rounded-md border border-kumo-danger/40 px-3 py-2 text-sm text-kumo-danger">{notice.message}</p>}
+				<label className="block text-sm"><span className="mb-1 block font-medium">Nombre</span><input autoFocus value={newArchName} onChange={(e) => setNewArchName(e.target.value)} placeholder="N's Zoroark / Munkidori" className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3" /></label>
+				<label className="block text-sm"><span className="mb-1 block font-medium">Filtrar Pokémon</span><input value={pokemonFilter} onChange={(e) => setPokemonFilter(e.target.value)} placeholder="Zoroark, Charizard, Mega…" className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3" /></label>
+				<div className="grid gap-3 sm:grid-cols-2">
+					<label className="block text-sm"><span className="mb-1 block font-medium">Pokémon principal</span><select value={primaryPokemon} onChange={(e) => setPrimaryPokemon(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3"><option value="">Seleccionar…</option>{filteredPokemon.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}{primaryPokemon && !filteredPokemon.some((item) => item.value === primaryPokemon) && <option value={primaryPokemon}>{pokemonOptions.find((item) => item.value === primaryPokemon)?.label ?? primaryPokemon}</option>}</select></label>
+					<label className="block text-sm"><span className="mb-1 block font-medium">Segundo (opcional)</span><select value={secondaryPokemon} onChange={(e) => setSecondaryPokemon(e.target.value)} className="h-9 w-full rounded-md border border-kumo-line bg-kumo-elevated px-3"><option value="">Ninguno</option>{filteredPokemon.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}{secondaryPokemon && !filteredPokemon.some((item) => item.value === secondaryPokemon) && <option value={secondaryPokemon}>{pokemonOptions.find((item) => item.value === secondaryPokemon)?.label ?? secondaryPokemon}</option>}</select></label>
+				</div>
+				<div className="flex justify-end gap-2 pt-1">
+					<button type="button" onClick={() => setCreatingArchetype(false)} className="h-9 rounded-md border border-kumo-line px-4 text-sm">Cancelar</button>
+					<button type="button" disabled={savingArchetype} onClick={() => void createArchetype()} className="h-9 rounded-md bg-kumo-accent px-4 text-sm font-medium text-white disabled:opacity-60">{savingArchetype ? "Creando…" : "Crear y seleccionar"}</button>
+				</div>
+			</div>
+		</div>}
 
 		<section className="rounded-lg border border-kumo-line bg-kumo-elevated p-4">
 			<div className="mb-3 flex items-center justify-between gap-3"><h2 className="font-semibold">Cartas ({total})</h2><span className="text-xs text-kumo-subtle">Busca para agregar · ajusta cantidad o quita</span></div>
@@ -266,8 +339,29 @@ function DecksPage() {
 	const [format, setFormat] = useState("all");
 	const [editing, setEditing] = useState<string | "new" | null>(null);
 	const [listNotice, setListNotice] = useState<Notice>(null);
+	const [reanalyzingId, setReanalyzingId] = useState<string | null>(null);
 	const decks = useMemo(() => (data?.decks ?? []).filter((deck) => `${deck.name} ${deck.archetypeName}`.toLowerCase().includes(search.toLowerCase()) && (format === "all" || deck.format === format)), [data, search, format]);
 	const editingDeck = editing && editing !== "new" ? data?.decks.find((deck) => deck.id === editing) : undefined;
+
+	const reanalyzeDeck = async (deck: Decklist) => {
+		if (reanalyzingId) return;
+		setReanalyzingId(deck.id);
+		setListNotice({ type: "success", message: `Reanalizando “${deck.name}”…` });
+		try {
+			const result = await request<{ ok: boolean; error?: string; message?: string }>("decks/reanalyze", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: deck.id }),
+			});
+			if (!result.ok) { setListNotice({ type: "error", message: result.error || "No se pudo reanalizar" }); return; }
+			await reload();
+			setListNotice({ type: "success", message: result.message || "Reanálisis listo" });
+		} catch (cause) {
+			setListNotice({ type: "error", message: cause instanceof Error ? cause.message : "No se pudo reanalizar" });
+		} finally {
+			setReanalyzingId(null);
+		}
+	};
 
 	if (editing !== null && data) {
 		return <DeckEditor
@@ -302,7 +396,12 @@ function DecksPage() {
 					onEdit={() => setEditing(deck.id)}
 					onDuplicate={() => void editor.action("duplicate_deck", deck.id)}
 					onDelete={() => { if (confirm(`¿Eliminar ${deck.name}?`)) void editor.action("delete_deck", deck.id); }}
-					extra={<IconButton label={`Reanalizar imágenes de ${deck.name}`} onClick={() => void editor.action("reanalyze_deck", deck.id)}><ArrowsClockwise size={17} /></IconButton>}
+					extra={<IconButton
+						label={reanalyzingId === deck.id ? `Reanalizando ${deck.name}…` : `Reanalizar imágenes de ${deck.name}`}
+						busy={reanalyzingId === deck.id}
+						disabled={Boolean(reanalyzingId) && reanalyzingId !== deck.id}
+						onClick={() => void reanalyzeDeck(deck)}
+					><ArrowsClockwise size={17} /></IconButton>}
 				/></td>
 			</tr>)}
 		</AdminTable>
@@ -331,4 +430,21 @@ function CardsPage() {
 	return <div><PageHeader title="Buscar cartas" description="Consulta el catálogo TCGDex para insertar cartas en el contenido." /><div className="mb-4 flex gap-2"><div className="flex-1"><Toolbar search={search} setSearch={setSearch} placeholder="Buscar por nombre de carta" /></div><button type="button" onClick={() => void run()} className="h-9 rounded-md bg-kumo-accent px-4 text-sm font-medium text-white">{loading ? "Buscando…" : "Buscar"}</button></div><AdminTable columns={["Carta", "Número", "ID TCGDex"]} empty={!cards.length}>{cards.map((card) => <tr key={card.id} className="border-b border-kumo-line last:border-0"><td className="px-4 py-3 font-medium">{card.name}</td><td className="px-4 py-3 text-kumo-subtle">{card.localId}</td><td className="px-4 py-3 font-mono text-xs text-kumo-subtle">{card.id}</td></tr>)}</AdminTable></div>;
 }
 
+function TcgShortcutsWidget() {
+	const { data, error } = useAdminData();
+	const links = [
+		{ href: "/_emdash/admin/plugins/pokemon-decklists/decks", label: "Decklists", count: data?.decks.length, hint: "Importar y editar listas" },
+		{ href: "/_emdash/admin/plugins/pokemon-decklists/archetypes", label: "Arquetipos", count: data?.archetypes.length, hint: "Pokémon del meta" },
+		{ href: "/_emdash/admin/plugins/pokemon-decklists/results", label: "Resultados", count: data?.tournaments.length, hint: "Torneos y rondas" },
+	];
+	if (!data && error) return <p className="text-sm text-kumo-danger">{error}</p>;
+	return <div className="grid gap-3 sm:grid-cols-3">
+		{links.map((link) => <a key={link.href} href={link.href} className="rounded-md border border-kumo-line bg-kumo-elevated p-4 transition hover:border-kumo-accent hover:bg-kumo-tint">
+			<div className="flex items-baseline justify-between gap-2"><span className="font-semibold text-kumo-default">{link.label}</span><span className="text-2xl font-semibold tabular-nums text-kumo-accent">{data ? link.count : "·"}</span></div>
+			<p className="mt-1 text-xs text-kumo-subtle">{link.hint}</p>
+		</a>)}
+	</div>;
+}
+
 export const pages = { "/decks": DecksPage, "/archetypes": ArchetypesPage, "/results": ResultsPage, "/cards": CardsPage };
+export const widgets = { "tcg-shortcuts": TcgShortcutsWidget };

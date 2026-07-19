@@ -1,20 +1,31 @@
+import dns from "node:dns";
 import type { CardCategory } from "./domain.js";
 import { chooseBasicPrinting, type FunctionalCard } from "./normalizer.js";
 
 const API_BASE = "https://api.tcgdex.net/v2";
 
+// ponytail: TCGdex AAAA often times out on some networks; ipv4first avoids ConnectTimeout.
+dns.setDefaultResultOrder("ipv4first");
+
+export type CardBrief = { id: string; localId: string | number; name: string; image?: string };
+
+/**
+ * Exact name match (case-insensitive).
+ * Avoid TCGdex `eq:` — it is case-sensitive (`eq:alakazam` → []).
+ */
 export async function searchCards(fetcher: typeof fetch, language: string, name: string) {
-	const url = `${API_BASE}/${safeLanguage(language)}/cards?name=${encodeURIComponent(`eq:${name}`)}`;
+	const url = `${API_BASE}/${safeLanguage(language)}/cards?name=${encodeURIComponent(name)}`;
 	const response = await fetcher(url, { headers: { accept: "application/json" } });
 	if (!response.ok) throw new Error(`TCGDex respondió ${response.status}`);
-	return await response.json() as Array<{ id: string; localId: string | number; name: string; image?: string }>;
+	const needle = name.trim().toLowerCase();
+	return (await response.json() as CardBrief[]).filter((card) => card.name.toLowerCase() === needle);
 }
 
 export async function searchCardCatalog(fetcher: typeof fetch, language: string, query: string) {
 	const url = `${API_BASE}/${safeLanguage(language)}/cards?name=${encodeURIComponent(query)}`;
 	const response = await fetcher(url, { headers: { accept: "application/json" } });
 	if (!response.ok) throw new Error(`TCGDex respondió ${response.status}`);
-	return (await response.json() as Array<{ id: string; localId: string | number; name: string; image?: string }>).slice(0, 50);
+	return (await response.json() as CardBrief[]).slice(0, 50);
 }
 
 export async function getCard(fetcher: typeof fetch, language: string, id: string) {
@@ -98,18 +109,16 @@ export async function resolveBasicPrinting(
 		? original
 		: chooseBasicPrinting(original, details, format);
 
-	// Promo rows in TCGDex sometimes have no image (MEP Alakazam 003)
+	// Promo rows in TCGDex often have no image; borrow art from the set reprint
+	// with the same attacks/abilities (MEP Alakazam 003 → me01-056).
 	if (!selected.image) {
-		const sameNumber = collectorNumber
-			? details.filter((card) => card.image && equivalentCollectorNumber(card.localId, collectorNumber))
-			: [];
-		const withImage = sameNumber.length ? sameNumber : details.filter((card) => card.image);
-		if (withImage.length) {
-			selected = chooseBasicPrinting(selected, withImage, format);
+		const withImage = details.filter((card) => card.image);
+		const art = withImage.length ? chooseBasicPrinting(selected, withImage, format) : selected;
+		if (art.image) {
 			return {
 				status: "basic-equivalent" as const,
 				original: withoutCommercialData(original),
-				selected: withoutCommercialData(selected),
+				selected: withoutCommercialData(art),
 			};
 		}
 	}

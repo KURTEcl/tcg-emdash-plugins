@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.8.1";
+const VERSION = "0.8.5";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
@@ -23,6 +23,9 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 			{ path: "/archetypes", label: "Arquetipos Pokémon", icon: "list" },
 			{ path: "/results", label: "Resultados Pokémon", icon: "chart" },
 			{ path: "/cards", label: "Buscar cartas", icon: "search" },
+		],
+		adminWidgets: [
+			{ id: "tcg-shortcuts", title: "Pokémon TCG", size: "full" },
 		],
 		portableTextBlocks: [{
 			type: "pokemonDecklist",

@@ -17,4 +17,26 @@ describe("chooseBasicPrinting", () => {
 		const other = { ...base, id: "other", attacks: [{ name: "Different attack", damage: 100 }] };
 		expect(chooseBasicPrinting(base, [other]).id).toBe("regular");
 	});
+
+	it("matches incomplete promo rows to the full set printing", () => {
+		const promo: FunctionalCard = {
+			id: "mep-003", name: "Alakazam", localId: "003", category: "Pokemon", hp: 140,
+			stage: "Stage2", regulationMark: "I", retreat: 1, rarity: "Promo",
+			abilities: [{ name: "Psychic Draw" }],
+			attacks: [{ name: "Powerful Hand" }],
+		};
+		const setPrint: FunctionalCard = {
+			...promo,
+			id: "me01-056",
+			localId: "056",
+			image: "https://assets.tcgdex.net/en/me/me01/056",
+			evolveFrom: "Kadabra",
+			weaknesses: [{ type: "Darkness", value: "×2" }],
+			resistances: [{ type: "Fighting", value: "-30" }],
+			rarity: "Rare",
+			variants: { normal: true },
+			legal: { standard: true },
+		};
+		expect(chooseBasicPrinting(promo, [promo, setPrint]).id).toBe("me01-056");
+	});
 });

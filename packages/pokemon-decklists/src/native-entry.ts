@@ -17,6 +17,7 @@ export function createPlugin() {
 			...(plugin as any).admin,
 			entry: descriptor.adminEntry,
 			pages: descriptor.adminPages,
+			widgets: descriptor.adminWidgets,
 			portableTextBlocks: descriptor.portableTextBlocks,
 		},
 	};

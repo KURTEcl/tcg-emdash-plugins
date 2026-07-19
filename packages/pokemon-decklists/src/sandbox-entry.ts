@@ -2,13 +2,13 @@ import { definePlugin } from "emdash";
 import type { PluginContext } from "emdash";
 import type { Archetype, ArchetypePokemon, CardCategory, DeckCard, Decklist, MatchResult, TournamentResult } from "./domain.js";
 import { isCatalogDecklist } from "./domain.js";
-import { parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
+import { mergeEquivalentCards, parsePokemonDecklist, serializePokemonDecklist } from "./parser.js";
 import { getArchetypePokemon, listPokemonOptions, type PokemonOption } from "./pokeapi.js";
 import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
 import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.8.1";
+const VERSION = "0.8.5";
 const tournamentCategories = [
 	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
 	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
@@ -103,6 +103,38 @@ export default definePlugin({
 				return saveDeckFromEditor(values, ctx);
 			},
 		},
+		"decks/reanalyze": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
+				const id = String(values.id ?? "").trim();
+				if (!id) return { ok: false, error: "Falta el id del decklist" };
+				const deck = await ctx.storage.decks!.get(id) as Decklist | null;
+				if (!deck) return { ok: false, error: "No se encontró el decklist" };
+				const before = deck.cards.length;
+				const normalized = await normalizeDeck(deck, ctx, true);
+				await ctx.storage.decks!.put(id, normalized.deck);
+				const merged = before - normalized.deck.cards.length;
+				return {
+					ok: true,
+					deck: normalized.deck,
+					resolved: normalized.resolved,
+					unresolved: normalized.unresolved,
+					merged,
+					message: `${normalized.resolved} imágenes reanalizadas · ${normalized.unresolved} pendientes${merged > 0 ? ` · ${merged} líneas unificadas` : ""}`,
+				};
+			},
+		},
+		"pokemon-options": {
+			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => ({
+				items: await getCachedPokemonOptions(ctx),
+			}),
+		},
+		"archetypes/save": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const values = (routeCtx.input && typeof routeCtx.input === "object" ? routeCtx.input : {}) as Record<string, unknown>;
+				return saveArchetypeFromEditor(values, ctx);
+			},
+		},
 		tournaments: {
 			public: true,
 			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => {
@@ -151,7 +183,8 @@ export default definePlugin({
 				const name = new URL(routeCtx.request.url).searchParams.get("name")?.trim();
 				if (!name) return { items: [] };
 				const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? "en";
-				return { items: await searchCards((url, init) => ctx.http!.fetch(String(url), init), language, name) };
+				// Catalog (contains) search — `eq:` is case-sensitive and empty for "alakazam"
+				return { items: await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, name) };
 			},
 		},
 		"cards/resolve-basic": {
@@ -215,9 +248,11 @@ async function handleAction(interaction: Interaction, ctx: PluginContext) {
 		const deck = await ctx.storage.decks!.get(id) as Decklist | null;
 		if (!deck) return renderAdmin(ctx, { error: "No se encontró el decklist" });
 		const force = interaction.action_id === "reanalyze_deck";
+		const before = deck.cards.length;
 		const normalized = await normalizeDeck(deck, ctx, force);
 		await ctx.storage.decks!.put(id, normalized.deck);
-		return renderAdmin(ctx, { message: `${normalized.resolved} cartas visuales ${force ? "reanalizadas" : "normalizadas"}; ${normalized.unresolved} pendientes` });
+		const merged = before - normalized.deck.cards.length;
+		return renderAdmin(ctx, { message: `${normalized.resolved} cartas visuales ${force ? "reanalizadas" : "normalizadas"}; ${normalized.unresolved} pendientes${force && merged > 0 ? `; ${merged} líneas unificadas` : ""}` });
 	}
 	if (interaction.action_id === "delete_result") {
 		await ctx.storage.matches!.delete(id);
@@ -244,15 +279,26 @@ async function handleAction(interaction: Interaction, ctx: PluginContext) {
 }
 
 async function saveArchetype(values: Record<string, unknown>, ctx: PluginContext, existingId?: string) {
+	const saved = await persistArchetype(values, ctx, existingId);
+	if (!saved.ok) return renderArchetypeEditor(ctx, existingId, { error: saved.error });
+	return renderArchetypes(ctx, { message: `Arquetipo ${saved.archetype.name} guardado` });
+}
+
+async function saveArchetypeFromEditor(values: Record<string, unknown>, ctx: PluginContext) {
+	return persistArchetype(values, ctx);
+}
+
+async function persistArchetype(values: Record<string, unknown>, ctx: PluginContext, existingId?: string) {
 	const name = String(values.name ?? "").trim();
 	const pokemon = await resolveArchetypePokemon(values, ctx);
-	if (!name || !pokemon.length) return renderArchetypes(ctx, { error: "Indica un nombre y al menos un Pokémon válido" });
+	if (!name || !pokemon.length) return { ok: false as const, error: "Indica un nombre y al menos un Pokémon válido" };
 	const id = existingId || slugify(name);
 	const existing = await ctx.storage.archetypes!.get(id) as Archetype | null;
-	if (!existingId && existing) return renderArchetypeEditor(ctx, undefined, { error: "Ya existe un arquetipo con ese nombre" });
+	if (!existingId && existing) return { ok: false as const, error: "Ya existe un arquetipo con ese nombre" };
 	const now = new Date().toISOString();
-	await ctx.storage.archetypes!.put(id, { id, name, game: "pokemon", pokemon, createdAt: existing?.createdAt ?? now, updatedAt: now });
-	return renderArchetypes(ctx, { message: `Arquetipo ${name} guardado` });
+	const archetype: Archetype = { id, name, game: "pokemon", pokemon, createdAt: existing?.createdAt ?? now, updatedAt: now };
+	await ctx.storage.archetypes!.put(id, archetype);
+	return { ok: true as const, archetype };
 }
 
 async function saveDeck(action: string, values: Record<string, unknown>, ctx: PluginContext) {
@@ -576,9 +622,11 @@ function asEditorCard(value: unknown): DeckCard | null {
 
 async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) {
 	const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? deck.language ?? "en";
+	// Reanalyze also merges trainers/energies that were saved with different set codes
+	const sourceCards = force ? mergeEquivalentCards(deck.cards) : deck.cards;
 	let resolved = 0; let unresolved = 0;
 	const cards: DeckCard[] = [];
-	for (const card of deck.cards) {
+	for (const card of sourceCards) {
 		if (!force && !isBasicEnergy(card.importedPrinting.name) && card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
 			cards.push(card); resolved++; continue;
 		}
@@ -598,7 +646,8 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) 
 			resolved++;
 		} catch { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; }
 	}
-	return { deck: { ...deck, cards, updatedAt: new Date().toISOString() }, resolved, unresolved };
+	const totalCards = cards.reduce((sum, card) => sum + card.quantity, 0);
+	return { deck: { ...deck, cards, totalCards, updatedAt: new Date().toISOString() }, resolved, unresolved };
 }
 
 function reuseResolvedCards(cards: DeckCard[], previous: DeckCard[] | undefined) {
