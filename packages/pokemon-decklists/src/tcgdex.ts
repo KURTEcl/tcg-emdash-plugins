@@ -17,11 +17,21 @@ export async function getCard(fetcher: typeof fetch, language: string, id: strin
 	return await response.json() as FunctionalCard;
 }
 
+async function getSetAbbreviation(fetcher: typeof fetch, language: string, id: string) {
+	const response = await fetcher(`${API_BASE}/${safeLanguage(language)}/sets/${encodeURIComponent(id)}`, {
+		headers: { accept: "application/json" },
+	});
+	if (!response.ok) return undefined;
+	const set = await response.json() as { abbreviation?: { official?: string } };
+	return set.abbreviation?.official?.trim().toUpperCase();
+}
+
 export async function resolveBasicPrinting(
 	fetcher: typeof fetch,
 	language: string,
 	name: string,
 	collectorNumber?: string,
+	setCode?: string,
 	format = "standard",
 ) {
 	const canonicalName = canonicalCardName(name);
@@ -34,9 +44,19 @@ export async function resolveBasicPrinting(
 			}
 		}
 	}
-	const possibleOriginals = collectorNumber
+	let possibleOriginals = collectorNumber
 		? brief.filter((card) => equivalentCollectorNumber(card.localId, collectorNumber))
 		: brief;
+	if (possibleOriginals.length > 1 && setCode) {
+		const expectedSetCode = setCode.trim().toUpperCase();
+		const matchingSet = (await Promise.all(possibleOriginals.map(async (card) => {
+			const detail = await getCard(fetcher, language, card.id);
+			if (!detail?.set?.id) return null;
+			const abbreviation = await getSetAbbreviation(fetcher, language, detail.set.id);
+			return abbreviation === expectedSetCode ? card : null;
+		}))).filter((card): card is typeof possibleOriginals[number] => card !== null);
+		if (matchingSet.length) possibleOriginals = matchingSet;
+	}
 	if (possibleOriginals.length !== 1) return { status: "unresolved" as const, candidates: brief };
 
 	const original = await getCard(fetcher, language, possibleOriginals[0].id);

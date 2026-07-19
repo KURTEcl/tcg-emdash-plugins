@@ -84,7 +84,7 @@ export default definePlugin({
 				const name = url.searchParams.get("name")?.trim();
 				if (!name) throw new Response("Nombre requerido", { status: 400 });
 				const language = (await ctx.kv.get<string>("settings:cardLanguage")) ?? "en";
-				return resolveBasicPrinting((request, init) => ctx.http!.fetch(String(request), init), language, name, url.searchParams.get("number") ?? undefined, url.searchParams.get("format") ?? "standard");
+				return resolveBasicPrinting((request, init) => ctx.http!.fetch(String(request), init), language, name, url.searchParams.get("number") ?? undefined, url.searchParams.get("set") ?? undefined, url.searchParams.get("format") ?? "standard");
 			},
 		},
 	},
@@ -254,7 +254,7 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext) {
 			cards.push(card); resolved++; continue;
 		}
 		try {
-			const result = await resolveBasicPrinting((url, init) => ctx.http!.fetch(String(url), init), language, card.importedPrinting.name, card.importedPrinting.collectorNumber, deck.format);
+			const result = await resolveBasicPrinting((url, init) => ctx.http!.fetch(String(url), init), language, card.importedPrinting.name, card.importedPrinting.collectorNumber, card.importedPrinting.setCode, deck.format);
 			if (result.status === "unresolved" || !result.selected) { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; continue; }
 			const selected = result.selected;
 			cards.push({ ...card, displayPrinting: { id: selected.id, name: selected.name, setCode: card.importedPrinting.setCode, collectorNumber: String(selected.localId), imageUrl: selected.image ? `${selected.image}/high.webp` : undefined, rarity: selected.rarity }, resolutionStatus: result.status });
