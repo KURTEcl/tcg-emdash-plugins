@@ -42,7 +42,49 @@ export function parsePokemonDecklist(input: string): ParsedDeck {
 		});
 	}
 
-	return { cards, totalCards: cards.reduce((sum, card) => sum + card.quantity, 0), errors };
+	const merged = mergeEquivalentCards(cards);
+	return { cards: merged, totalCards: merged.reduce((sum, card) => sum + card.quantity, 0), errors };
+}
+
+/** Trainers/energies: same name → one line. Pokémon: same name + number → one line. */
+export function mergeEquivalentCards(cards: DeckCard[]): DeckCard[] {
+	const merged = new Map<string, DeckCard>();
+	for (const card of cards) {
+		const key = cardMergeKey(card);
+		const existing = merged.get(key);
+		if (!existing) {
+			merged.set(key, {
+				...card,
+				importedPrinting: { ...card.importedPrinting },
+				displayPrinting: { ...card.displayPrinting },
+			});
+			continue;
+		}
+		existing.quantity += card.quantity;
+		if (card.category !== "pokemon") {
+			// ponytail: trainers/energies ignore set/number after merge — resolve by name only
+			existing.importedPrinting = { name: existing.importedPrinting.name };
+			existing.displayPrinting = { name: existing.displayPrinting.name };
+			existing.resolutionStatus = "pending";
+		}
+	}
+	return [...merged.values()];
+}
+
+function cardMergeKey(card: DeckCard) {
+	const name = card.importedPrinting.name.trim().toLowerCase();
+	if (card.category === "pokemon") {
+		const number = normalizeCollectorNumber(card.importedPrinting.collectorNumber);
+		return `pokemon|${name}|${number}`;
+	}
+	return `${card.category}|${name}`;
+}
+
+function normalizeCollectorNumber(value?: string) {
+	const text = (value ?? "").trim().toLowerCase();
+	if (!text) return "";
+	if (/^\d+$/.test(text)) return String(Number(text));
+	return text.replace(/^0+/, "") || "0";
 }
 
 function parseCardLine(line: string) {
@@ -52,7 +94,8 @@ function parseCardLine(line: string) {
 	if (!Number.isInteger(quantity) || quantity < 1 || quantity > 60) return null;
 
 	const remainder = quantityMatch[2].trim();
-	const full = remainder.match(/^(.+?)\s+([A-Z0-9]{2,12})\s+([A-Z0-9-]+)$/i);
+	// Allow hyphens in set codes (PR-SW, etc.)
+	const full = remainder.match(/^(.+?)\s+([A-Z0-9][A-Z0-9-]{1,11})\s+([A-Z0-9-]+)$/i);
 	if (full) {
 		return { quantity, name: full[1].trim(), setCode: full[2].toUpperCase(), collectorNumber: full[3] };
 	}

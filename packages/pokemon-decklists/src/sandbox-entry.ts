@@ -8,7 +8,7 @@ import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
 import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.8.0";
+const VERSION = "0.8.1";
 const tournamentCategories = [
 	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
 	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
@@ -583,7 +583,15 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext, force = false) 
 			cards.push(card); resolved++; continue;
 		}
 		try {
-			const result = await resolveBasicPrinting((url, init) => ctx.http!.fetch(String(url), init), language, card.importedPrinting.name, card.importedPrinting.collectorNumber, card.importedPrinting.setCode, deck.format);
+			const result = await resolveBasicPrinting(
+				(url, init) => ctx.http!.fetch(String(url), init),
+				language,
+				card.importedPrinting.name,
+				card.category === "pokemon" ? card.importedPrinting.collectorNumber : undefined,
+				card.category === "pokemon" ? card.importedPrinting.setCode : undefined,
+				deck.format,
+				{ category: card.category },
+			);
 			if (result.status === "unresolved" || !result.selected) { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; continue; }
 			const selected = result.selected;
 			cards.push({ ...card, displayPrinting: { id: selected.id, name: selected.name, setCode: card.importedPrinting.setCode, collectorNumber: String(selected.localId), imageUrl: selected.image ? `${selected.image}/high.webp` : undefined, rarity: selected.rarity }, resolutionStatus: result.status });

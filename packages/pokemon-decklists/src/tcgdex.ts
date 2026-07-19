@@ -1,3 +1,4 @@
+import type { CardCategory } from "./domain.js";
 import { chooseBasicPrinting, type FunctionalCard } from "./normalizer.js";
 
 const API_BASE = "https://api.tcgdex.net/v2";
@@ -33,6 +34,10 @@ async function getSetAbbreviation(fetcher: typeof fetch, language: string, id: s
 	return set.abbreviation?.official?.trim().toUpperCase();
 }
 
+/**
+ * Pokémon: match by name + collector number (set disambiguates collisions).
+ * Trainers / energies: match by name only and pick a basic printing with art.
+ */
 export async function resolveBasicPrinting(
 	fetcher: typeof fetch,
 	language: string,
@@ -40,37 +45,79 @@ export async function resolveBasicPrinting(
 	collectorNumber?: string,
 	setCode?: string,
 	format = "standard",
+	options?: { category?: CardCategory },
 ) {
 	const canonicalName = canonicalCardName(name);
 	const brief = await searchCards(fetcher, language, canonicalName);
-	if (isBasicEnergy(name)) {
-		for (const candidate of brief.filter((card) => card.image)) {
-			const selected = await getCard(fetcher, language, candidate.id);
-			if (selected && !selected.effect && selected.variants?.normal && !/secret|hyper|gold/i.test(selected.rarity ?? "")) {
-				return { status: "basic-equivalent" as const, original: withoutCommercialData(selected), selected: withoutCommercialData(selected) };
-			}
-		}
-	}
+	const nameOnly = options?.category === "trainer"
+		|| options?.category === "energy"
+		|| isBasicEnergy(name);
+
+	if (nameOnly) return resolveByName(fetcher, language, brief, format);
+
 	let possibleOriginals = collectorNumber
 		? brief.filter((card) => equivalentCollectorNumber(card.localId, collectorNumber))
 		: brief;
+
 	if (possibleOriginals.length > 1 && setCode) {
 		const expectedSetCode = setCode.trim().toUpperCase();
 		const matchingSet = (await Promise.all(possibleOriginals.map(async (card) => {
 			const detail = await getCard(fetcher, language, card.id);
 			if (!detail?.set?.id) return null;
 			const abbreviation = await getSetAbbreviation(fetcher, language, detail.set.id);
-			return abbreviation === expectedSetCode ? card : null;
+			if (abbreviation === expectedSetCode) return card;
+			if (detail.set.id.toUpperCase() === expectedSetCode) return card;
+			return null;
 		}))).filter((card): card is typeof possibleOriginals[number] => card !== null);
 		if (matchingSet.length) possibleOriginals = matchingSet;
 	}
-	if (possibleOriginals.length !== 1) return { status: "unresolved" as const, candidates: brief };
 
-	const original = await getCard(fetcher, language, possibleOriginals[0].id);
+	// Direct id hint: MEP 003 → mep-003
+	if (possibleOriginals.length !== 1 && setCode && collectorNumber) {
+		const expected = setCode.trim().toLowerCase();
+		const padded = padCollectorForSetId(collectorNumber);
+		const byId = brief.filter((card) =>
+			card.id.toLowerCase() === `${expected}-${padded}`
+			|| card.id.toLowerCase() === `${expected}-${collectorNumber.toLowerCase()}`,
+		);
+		if (byId.length === 1) possibleOriginals = byId;
+	}
+
+	if (!possibleOriginals.length) return { status: "unresolved" as const, candidates: brief };
+
+	const originalBrief = possibleOriginals.length === 1
+		? possibleOriginals[0]
+		: possibleOriginals.find((card) => card.image) ?? possibleOriginals[0];
+	const original = await getCard(fetcher, language, originalBrief.id);
 	if (!original) return { status: "unresolved" as const, candidates: brief };
+
 	const details = (await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
 		.filter((card): card is FunctionalCard => card !== null);
-	const selected = chooseBasicPrinting(original, details, format);
+
+	let selected = possibleOriginals.length === 1
+		? original
+		: chooseBasicPrinting(original, details, format);
+
+	// Promo rows in TCGDex sometimes have no image (MEP Alakazam 003)
+	if (!selected.image) {
+		const sameNumber = collectorNumber
+			? details.filter((card) => card.image && equivalentCollectorNumber(card.localId, collectorNumber))
+			: [];
+		const withImage = sameNumber.length ? sameNumber : details.filter((card) => card.image);
+		if (withImage.length) {
+			selected = chooseBasicPrinting(selected, withImage, format);
+			return {
+				status: "basic-equivalent" as const,
+				original: withoutCommercialData(original),
+				selected: withoutCommercialData(selected),
+			};
+		}
+	}
+
+	if (possibleOriginals.length !== 1 && !setCode) {
+		return { status: "unresolved" as const, candidates: brief };
+	}
+
 	return {
 		status: selected.id === original.id ? "exact" as const : "basic-equivalent" as const,
 		original: withoutCommercialData(original),
@@ -78,7 +125,34 @@ export async function resolveBasicPrinting(
 	};
 }
 
-function equivalentCollectorNumber(a: string | number, b: string | number) {
+async function resolveByName(
+	fetcher: typeof fetch,
+	language: string,
+	brief: Array<{ id: string; localId: string | number; name: string; image?: string }>,
+	format: string,
+) {
+	if (!brief.length) return { status: "unresolved" as const, candidates: brief };
+	const details = (await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
+		.filter((card): card is FunctionalCard => card !== null);
+	const withImage = details.filter((card) => card.image);
+	const pool = withImage.length ? withImage : details;
+	if (!pool.length) return { status: "unresolved" as const, candidates: brief };
+	const selected = chooseBasicPrinting(pool[0], pool, format);
+	return {
+		status: "basic-equivalent" as const,
+		original: withoutCommercialData(pool[0]),
+		selected: withoutCommercialData(selected),
+	};
+}
+
+/** mep ids use 003; live exports sometimes send 3 or 003 */
+function padCollectorForSetId(collectorNumber: string) {
+	const text = collectorNumber.trim();
+	if (/^\d+$/.test(text) && text.length < 3) return text.padStart(3, "0");
+	return text.toLowerCase();
+}
+
+export function equivalentCollectorNumber(a: string | number, b: string | number) {
 	const left = String(a).trim().toLowerCase();
 	const right = String(b).trim().toLowerCase();
 	if (left === right) return true;
