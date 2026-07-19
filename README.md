@@ -4,6 +4,7 @@ Monorepo open source de plugins para mejorar la publicación de contenido TCG en
 
 ## Plugins planificados
 
+- `theme-settings`: colores y Google Fonts administrables desde EmDash.
 - `decklist`: listas de cartas, secciones, formatos e importación/exportación.
 - `tournaments`: eventos, rondas, resultados y posiciones.
 - `hub-connector`: conexión voluntaria y segura con un HUB externo.

@@ -1,0 +1,13 @@
+{
+	"name": "@tcg-emdash/plugin-theme-settings",
+	"version": "0.1.0",
+	"description": "Admin-managed colors and Google Fonts for EmDash themes",
+	"type": "module",
+	"exports": { ".": { "types": "./dist/index.d.mts", "import": "./dist/index.mjs" } },
+	"files": ["dist", "README.md"],
+	"scripts": { "build": "tsdown src/index.ts --format esm --dts", "typecheck": "tsc --noEmit" },
+	"keywords": ["emdash", "plugin", "theme", "google-fonts"],
+	"license": "MIT",
+	"peerDependencies": { "emdash": ">=0.28.0" },
+	"devDependencies": { "emdash": "^0.28.1", "tsdown": "^0.20.3", "typescript": "^6.0.3" }
+}
