@@ -35,9 +35,21 @@ export async function resolveBasicPrinting(
 	const details = (await Promise.all(brief.map((card) => getCard(fetcher, language, card.id))))
 		.filter((card): card is FunctionalCard => card !== null);
 	const selected = chooseBasicPrinting(original, details, format);
-	return { status: selected.id === original.id ? "exact" as const : "basic-equivalent" as const, original, selected };
+	return {
+		status: selected.id === original.id ? "exact" as const : "basic-equivalent" as const,
+		original: withoutCommercialData(original),
+		selected: withoutCommercialData(selected),
+	};
 }
 
 function safeLanguage(language: string) {
 	return /^[a-z]{2}$/i.test(language) ? language.toLowerCase() : "en";
+}
+
+function withoutCommercialData(card: FunctionalCard) {
+	const { pricing: _pricing, variants_detailed: _variantsDetailed, ...publicCard } = card as FunctionalCard & {
+		pricing?: unknown;
+		variants_detailed?: unknown;
+	};
+	return publicCard;
 }
