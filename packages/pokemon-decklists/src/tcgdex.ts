@@ -26,8 +26,8 @@ export async function resolveBasicPrinting(
 ) {
 	const canonicalName = canonicalCardName(name);
 	const brief = await searchCards(fetcher, language, canonicalName);
-	if (canonicalName !== name) {
-		const preferred = brief.find((card) => card.id.startsWith("mee-")) ?? brief.find((card) => card.id.startsWith("sve-")) ?? brief.find((card) => card.image);
+	if (isBasicEnergy(name)) {
+		const preferred = brief.find((card) => card.id.startsWith("mee-") && card.image) ?? brief.find((card) => card.id.startsWith("sve-") && card.image) ?? brief.find((card) => card.image);
 		const selected = preferred ? await getCard(fetcher, language, preferred.id) : null;
 		if (selected) return { status: "basic-equivalent" as const, original: withoutCommercialData(selected), selected: withoutCommercialData(selected) };
 	}
@@ -68,6 +68,10 @@ function canonicalCardName(name: string) {
 		"basic {m} energy": "Metal Energy",
 	};
 	return energyNames[name.trim().toLowerCase()] ?? name;
+}
+
+function isBasicEnergy(name: string) {
+	return /^(?:basic \{[dgrwlpfm]\} energy|darkness energy|fire energy|grass energy|water energy|lightning energy|psychic energy|fighting energy|metal energy)$/i.test(name.trim());
 }
 
 function safeLanguage(language: string) {

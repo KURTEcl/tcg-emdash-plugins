@@ -153,9 +153,10 @@ async function saveDeck(action: string, values: Record<string, unknown>, ctx: Pl
 	const existing = action === "update_deck" ? await ctx.storage.decks!.get(String(values.id ?? "")) as Decklist | null : null;
 	const now = new Date().toISOString();
 	const id = existing?.id ?? crypto.randomUUID();
-	const deck: Decklist = { id, name: String(values.name ?? archetype.name).trim() || "Decklist", archetypeId: archetype.id, archetypeName: archetype.name, archetypePokemon: archetype.pokemon, format: asFormat(values.format), language: existing?.language ?? "en", source: existing?.source ?? "ptcgl", cards: parsed.cards, totalCards: parsed.totalCards, createdAt: existing?.createdAt ?? now, updatedAt: now };
-	await ctx.storage.decks!.put(id, deck);
-	return renderAdmin(ctx, { message: `${existing ? "Decklist actualizado" : "Lista guardada"} con ${deck.totalCards} cartas` });
+	const deck: Decklist = { id, name: String(values.name ?? archetype.name).trim() || "Decklist", archetypeId: archetype.id, archetypeName: archetype.name, archetypePokemon: archetype.pokemon, format: asFormat(values.format), language: existing?.language ?? "en", source: existing?.source ?? "ptcgl", cards: reuseResolvedCards(parsed.cards, existing?.cards), totalCards: parsed.totalCards, createdAt: existing?.createdAt ?? now, updatedAt: now };
+	const normalized = await normalizeDeck(deck, ctx);
+	await ctx.storage.decks!.put(id, normalized.deck);
+	return renderAdmin(ctx, { message: `${existing ? "Decklist actualizado" : "Lista guardada"} con ${deck.totalCards} cartas · ${normalized.resolved} imágenes listas${normalized.unresolved ? ` · ${normalized.unresolved} pendientes` : ""}` });
 }
 
 async function saveResult(values: Record<string, unknown>, ctx: PluginContext) {
@@ -185,7 +186,7 @@ async function renderDeckEditor(ctx: any, id: string) {
 	const [deck, archetypeResult] = await Promise.all([ctx.storage.decks.get(id), ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 })]);
 	if (!deck) return renderAdmin(ctx, { error: "No se encontró el decklist" });
 	const archetypes = archetypeResult.items.map((item: { data: Archetype }) => item.data);
-	return { blocks: [{ type: "header", text: `Editar: ${deck.name}` }, { type: "section", text: "Guarda los cambios y luego usa Normalizar imágenes para mostrar las impresiones básicas." }, deckForm(archetypes, deck, "update_deck") ] };
+	return { blocks: [{ type: "header", text: `Editar: ${deck.name}` }, { type: "section", text: "Al guardar se conservan las imágenes existentes y se normalizan automáticamente las cartas nuevas. Sólo las energías básicas ignoran su edición; energías especiales y ACE SPEC mantienen su carta exacta." }, deckForm(archetypes, deck, "update_deck") ] };
 }
 
 function deckForm(archetypes: Archetype[], deck?: Decklist, action = "import_deck") {
@@ -249,6 +250,9 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext) {
 	let resolved = 0; let unresolved = 0;
 	const cards: DeckCard[] = [];
 	for (const card of deck.cards) {
+		if (card.displayPrinting.imageUrl && card.resolutionStatus !== "pending" && card.resolutionStatus !== "unresolved") {
+			cards.push(card); resolved++; continue;
+		}
 		try {
 			const result = await resolveBasicPrinting((url, init) => ctx.http!.fetch(String(url), init), language, card.importedPrinting.name, card.importedPrinting.collectorNumber, deck.format);
 			if (result.status === "unresolved" || !result.selected) { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; continue; }
@@ -258,6 +262,17 @@ async function normalizeDeck(deck: Decklist, ctx: PluginContext) {
 		} catch { cards.push({ ...card, resolutionStatus: "unresolved" }); unresolved++; }
 	}
 	return { deck: { ...deck, cards, updatedAt: new Date().toISOString() }, resolved, unresolved };
+}
+
+function reuseResolvedCards(cards: DeckCard[], previous: DeckCard[] | undefined) {
+	if (!previous?.length) return cards;
+	const resolved = new Map(previous.map((card) => [printingKey(card), card]));
+	return cards.map((card) => resolved.get(printingKey(card)) ?? card);
+}
+
+function printingKey(card: DeckCard) {
+	const printing = card.importedPrinting;
+	return [printing.name.trim().toLowerCase(), printing.setCode?.trim().toUpperCase() ?? "", printing.collectorNumber?.trim().replace(/^0+/, "") ?? ""].join("|");
 }
 
 async function resolveArchetypePokemon(values: Record<string, unknown>, ctx: PluginContext) {
