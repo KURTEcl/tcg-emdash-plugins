@@ -1,25 +1,22 @@
 import { definePlugin } from "emdash";
 import type { PluginDescriptor } from "emdash";
+import { defaults, fontOptions } from "./settings.js";
 
-const VERSION = "0.1.0";
-const defaults = {
-	backgroundColor: "#050505",
-	panelColor: "#0D0B08",
-	textColor: "#F4EEE5",
-	mutedColor: "#B7A98E",
-	borderColor: "#302A23",
-	primaryColor: "#BD5347",
-	accentColor: "#F59E2B",
-	bodyFont: "Space Grotesk",
-	headingFont: "Space Grotesk",
-} as const;
-const fontOptions = ["Space Grotesk", "Inter", "Roboto", "Lato", "Merriweather", "Source Sans 3", "Montserrat", "IBM Plex Sans"] as const;
+const VERSION = "0.2.0";
 const fontChoices = fontOptions.map((font) => ({ value: font, label: font }));
 const fontSet = new Set<string>(fontOptions);
 const hexColor = /^#[0-9a-f]{6}$/i;
 
 export function themeSettingsPlugin(): PluginDescriptor {
-	return { id: "theme-settings", version: VERSION, format: "native", entrypoint: "@tcg-emdash/plugin-theme-settings", options: {} };
+	return {
+		id: "theme-settings",
+		version: VERSION,
+		format: "native",
+		entrypoint: "@tcg-emdash/plugin-theme-settings",
+		adminEntry: "@tcg-emdash/plugin-theme-settings/admin",
+		adminPages: [{ path: "/appearance", label: "Apariencia", icon: "settings" }],
+		options: {},
+	};
 }
 
 export function createPlugin() {
@@ -28,6 +25,8 @@ export function createPlugin() {
 		version: VERSION,
 		capabilities: ["hooks.page-fragments:register"],
 		admin: {
+			entry: "@tcg-emdash/plugin-theme-settings/admin",
+			pages: [{ path: "/appearance", label: "Apariencia", icon: "settings" }],
 			settingsSchema: {
 				backgroundColor: colorField("Color de fondo", defaults.backgroundColor),
 				panelColor: colorField("Color de paneles", defaults.panelColor),
@@ -38,6 +37,16 @@ export function createPlugin() {
 				accentColor: colorField("Color de acento", defaults.accentColor),
 				bodyFont: { type: "select", label: "Fuente del contenido", options: fontChoices, default: defaults.bodyFont },
 				headingFont: { type: "select", label: "Fuente de títulos", options: fontChoices, default: defaults.headingFont },
+			},
+		},
+		routes: {
+			settings: {
+				handler: async (ctx) => {
+					if (ctx.request.method === "GET") return { settings: await readSettings(ctx.kv), defaults, fontOptions };
+					const input = asSettings(ctx.input);
+					for (const [key, value] of Object.entries(input)) await ctx.kv.set(`settings:${key}`, value);
+					return { settings: await readSettings(ctx.kv) };
+				},
 			},
 		},
 		hooks: {
@@ -62,6 +71,23 @@ export function createPlugin() {
 			},
 		},
 	});
+}
+
+function asSettings(input: unknown) {
+	if (!input || typeof input !== "object") throw new Error("Los ajustes enviados no son válidos.");
+	const candidate = input as Record<string, unknown>;
+	const result: Record<string, string> = {};
+	for (const key of ["backgroundColor", "panelColor", "textColor", "mutedColor", "borderColor", "primaryColor", "accentColor"] as const) {
+		const value = candidate[key];
+		if (typeof value !== "string" || !hexColor.test(value)) throw new Error(`${key} debe ser un color hexadecimal de seis dígitos.`);
+		result[key] = value.toUpperCase();
+	}
+	for (const key of ["bodyFont", "headingFont"] as const) {
+		const value = candidate[key];
+		if (typeof value !== "string" || !fontSet.has(value)) throw new Error(`${key} no es una fuente permitida.`);
+		result[key] = value;
+	}
+	return result;
 }
 
 function colorField(label: string, defaultValue: string) {

@@ -1,26 +1,46 @@
 {
 	"name": "@tcg-emdash/plugin-pokemon-decklists",
-	"version": "0.6.0",
+	"version": "0.7.0",
 	"description": "Pokémon TCG decklists, archetypes and match results for EmDash",
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./native": "./src/native-entry.ts",
+		"./admin": "./src/admin.tsx",
 		"./sandbox": "./src/sandbox-entry.ts",
 		"./astro": "./src/astro.ts",
-		"./DecklistBlock.astro": "./src/DecklistBlock.astro"
-		,"./ArchetypeDecklistsBlock.astro": "./src/ArchetypeDecklistsBlock.astro"
-		,"./PokemonCardBlock.astro": "./src/PokemonCardBlock.astro"
+		"./DecklistBlock.astro": "./src/DecklistBlock.astro",
+		"./ArchetypeDecklistsBlock.astro": "./src/ArchetypeDecklistsBlock.astro",
+		"./PokemonCardBlock.astro": "./src/PokemonCardBlock.astro",
+		"./PokemonCardGalleryBlock.astro": "./src/PokemonCardGalleryBlock.astro"
 	},
-	"files": ["src", "README.md"],
+	"files": [
+		"src",
+		"README.md"
+	],
 	"scripts": {
-		"build": "tsdown src/index.ts src/sandbox-entry.ts --format esm --dts",
+		"build": "tsdown src/index.ts src/native-entry.ts src/sandbox-entry.ts src/admin.tsx --format esm --dts --external react --external react-dom --external @emdash-cms/admin --external @emdash-cms/blocks --external @phosphor-icons/react",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run"
 	},
-	"keywords": ["emdash", "pokemon", "tcg", "decklist"],
+	"keywords": [
+		"emdash",
+		"pokemon",
+		"tcg",
+		"decklist"
+	],
 	"license": "MIT",
-	"peerDependencies": { "emdash": ">=0.28.0" },
+	"peerDependencies": {
+		"@emdash-cms/admin": ">=0.28.0",
+		"@emdash-cms/blocks": ">=0.28.0",
+		"@phosphor-icons/react": "^2.1.0",
+		"emdash": ">=0.28.0",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	},
 	"devDependencies": {
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
 		"emdash": "^0.28.1",
 		"tsdown": "^0.20.3",
 		"typescript": "^6.0.3",

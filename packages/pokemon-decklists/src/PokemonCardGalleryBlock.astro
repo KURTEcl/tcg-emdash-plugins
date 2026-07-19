@@ -1,0 +1,108 @@
+---
+interface Props { node: { cardIds?: string; cards?: string; description?: string; columns?: "2" | "3" | "4"; textPosition?: "below" | "right" } }
+const { node } = Astro.props;
+const source = node.cardIds ?? node.cards ?? "";
+const separated = source.split(/\r?\n|,/).map((line) => line.trim()).filter(Boolean);
+const recovered = separated.length > 1 || !source
+	? separated
+	: source.match(/[a-z][a-z0-9]*(?:\.\d+)?-[a-z0-9]+?(?=[a-z]{2,}\d|$)/gi) ?? separated;
+const requests = recovered.slice(0, 4);
+const cards = await Promise.all(requests.map(async (query) => {
+	const endpoint = new URL("/_emdash/api/plugins/pokemon-decklists/cards/display", Astro.url.origin);
+	if (/^[a-z0-9.]+-\d+$/i.test(query)) endpoint.searchParams.set("id", query);
+	else {
+		const parts = query.split(/\s+/); const number = parts.at(-1) ?? ""; const set = parts.at(-2) ?? "";
+		if (/^\d+[a-z]?$/i.test(number) && /^[a-z0-9.]+$/i.test(set)) { endpoint.searchParams.set("number", number); endpoint.searchParams.set("set", set); endpoint.searchParams.set("name", parts.slice(0, -2).join(" ")); }
+		else endpoint.searchParams.set("name", query);
+	}
+	try { const response = await fetch(endpoint); if (response.ok) { const body = await response.json(); return { query, ...(body.data ?? body).selected }; } } catch { /* placeholder below */ }
+	return { query };
+}));
+const instanceId = crypto.randomUUID();
+const dialogId = `pokemon-gallery-dialog-${instanceId}`;
+---
+<section class:list={["pokemon-card-gallery", `text-${node.textPosition ?? "below"}`]} data-card-gallery>
+	<div class="cards" style={`--card-columns:${node.columns ?? "4"}`}>
+		{cards.map((card) => <figure><button type="button" class="card-open" data-gallery-card-open data-card-name={card.name ?? card.query} data-card-set={card.set?.name ?? card.set?.id ?? ""} data-card-number={card.localId ?? ""} data-card-rarity={card.rarity ?? ""} data-card-image={card.image ? `${card.image}/high.webp` : ""} data-card-search={`/decklists?card=${encodeURIComponent(card.name ?? card.query)}`} aria-label={`Ver detalles de ${card.name ?? card.query}`} title={`Ver detalles de ${card.name ?? card.query}`}>{card.image ? <img src={`${card.image}/low.webp`} alt={card.name ?? card.query} loading="lazy" decoding="async" /> : <span class="placeholder">{card.query}</span>}</button><figcaption>{card.name ?? card.query}</figcaption></figure>)}
+	</div>
+	{node.description && <p>{node.description}</p>}
+	<dialog class="tcg-card-modal" id={dialogId} data-gallery-card-dialog aria-labelledby={`${dialogId}-title`}>
+		<div class="tcg-card-modal__shell">
+			<div class="tcg-card-modal__bar"><strong id={`${dialogId}-title`} data-gallery-modal-title>Detalle de la carta</strong><button type="button" data-gallery-card-close aria-label="Cerrar detalle de la carta" title="Cerrar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+			<div class="tcg-card-modal__body"><div class="tcg-card-modal__media" data-gallery-modal-media></div><div class="tcg-card-modal__info"><dl><div data-gallery-modal-set-row><dt>Colección</dt><dd data-gallery-modal-set></dd></div><div data-gallery-modal-number-row><dt>Número</dt><dd data-gallery-modal-number></dd></div><div data-gallery-modal-rarity-row><dt>Rareza</dt><dd data-gallery-modal-rarity></dd></div></dl><a data-gallery-modal-search href="/decklists">Ver otros decklists con esta carta <span aria-hidden="true">→</span></a></div></div>
+		</div>
+	</dialog>
+</section>
+
+<script>
+	document.addEventListener("click", (event) => {
+		const target = event.target as HTMLElement;
+		const openButton = target.closest<HTMLButtonElement>("[data-gallery-card-open]");
+		if (openButton) {
+			const gallery = openButton.closest<HTMLElement>("[data-card-gallery]");
+			const dialog = gallery?.querySelector<HTMLDialogElement>("[data-gallery-card-dialog]");
+			if (!dialog) return;
+			const name = openButton.dataset.cardName ?? "Carta";
+			const imageUrl = openButton.dataset.cardImage;
+			const title = dialog.querySelector<HTMLElement>("[data-gallery-modal-title]");
+			const media = dialog.querySelector<HTMLElement>("[data-gallery-modal-media]");
+			const search = dialog.querySelector<HTMLAnchorElement>("[data-gallery-modal-search]");
+			if (title) title.textContent = name;
+			if (media) {
+				media.replaceChildren();
+				if (imageUrl) { const image = document.createElement("img"); image.src = imageUrl; image.alt = name; media.append(image); }
+			}
+			for (const field of ["set", "number", "rarity"] as const) {
+				const value = openButton.dataset[`card${field[0].toUpperCase()}${field.slice(1)}` as "cardSet" | "cardNumber" | "cardRarity"] ?? "";
+				const row = dialog.querySelector<HTMLElement>(`[data-gallery-modal-${field}-row]`);
+				const output = dialog.querySelector<HTMLElement>(`[data-gallery-modal-${field}]`);
+				if (row) row.hidden = !value;
+				if (output) output.textContent = value;
+			}
+			if (search) search.href = openButton.dataset.cardSearch ?? "/decklists";
+			dialog.showModal();
+			return;
+		}
+		const closeButton = target.closest<HTMLButtonElement>("[data-gallery-card-close]");
+		if (closeButton) { closeButton.closest<HTMLDialogElement>("dialog")?.close(); return; }
+		if (target instanceof HTMLDialogElement && target.classList.contains("tcg-card-modal")) target.close();
+	});
+</script>
+<style>
+	.pokemon-card-gallery { --gallery-line: color-mix(in srgb, currentColor 16%, transparent); margin: 1.5rem 0; }
+	.cards { display: grid; grid-template-columns: repeat(var(--card-columns), minmax(0, 1fr)); gap: .75rem; }
+	.cards figure { margin: 0; min-width: 0; text-align: center; }
+	.card-open { display: block; width: 100%; padding: 0; border: 0; border-radius: .65rem; color: inherit; background: transparent; cursor: pointer; }
+	.card-open:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+	.cards img, .placeholder { display: block; width: 100%; aspect-ratio: 245 / 342; border-radius: .65rem; object-fit: cover; }
+	.placeholder { display: grid; place-items: center; padding: .75rem; background: color-mix(in srgb, currentColor 8%, transparent); box-sizing: border-box; }
+	.cards figcaption { margin-top: .4rem; font-size: .7rem; opacity: .7; }
+	.pokemon-card-gallery > p { margin: .9rem 0 0; white-space: pre-line; }
+	.text-right { display: grid; grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr); gap: 1.5rem; align-items: start; }
+	.text-right > p { margin: 0; }
+	/* Same modal chrome as DecklistBlock */
+	.tcg-card-modal { width: min(760px, calc(100vw - 2rem)); max-width: none; max-height: calc(100dvh - 2rem); margin: auto; padding: 0; border: 1px solid var(--gallery-line); border-radius: 1rem; color: inherit; background: var(--color-background, #101010); box-shadow: 0 24px 80px #000b; overflow: hidden; }
+	.tcg-card-modal::backdrop { background: #000b; backdrop-filter: blur(4px); }
+	.tcg-card-modal__shell { display: grid; grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - 2rem); }
+	.tcg-card-modal__bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--gallery-line); }
+	.tcg-card-modal__bar > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tcg-card-modal__bar button { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; padding: 0; border: 1px solid var(--gallery-line); border-radius: 999px; color: inherit; background: transparent; cursor: pointer; }
+	.tcg-card-modal__bar svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+	.tcg-card-modal__body { display: grid; grid-template-columns: minmax(220px, .8fr) 1fr; gap: 1.25rem; min-height: 0; overflow-y: auto; padding: 1rem; }
+	.tcg-card-modal__media { min-height: 220px; }
+	.tcg-card-modal__media :global(img) { display: block; width: 100%; max-height: calc(100dvh - 8rem); margin: 0; border-radius: .75rem; object-fit: contain; }
+	.tcg-card-modal__info { align-self: center; }
+	.tcg-card-modal__info dl { margin: 0 0 1.25rem; }
+	.tcg-card-modal__info dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--gallery-line); }
+	.tcg-card-modal__info dt { opacity: .62; }
+	.tcg-card-modal__info dd { margin: 0; text-align: right; }
+	.tcg-card-modal .tcg-card-modal__info a { display: inline-flex; align-items: center; gap: .5rem; padding: .7rem 1rem; border-radius: 999px; color: var(--color-on-brand, white); background: var(--color-brand, #d72638); font-weight: 700; text-decoration: none; }
+	@media (max-width: 640px) {
+		.cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.text-right { grid-template-columns: 1fr; }
+		.text-right > p { margin-top: 0; }
+		.tcg-card-modal__body { grid-template-columns: 1fr; }
+		.tcg-card-modal__media { min-height: 0; }
+		.tcg-card-modal__media :global(img) { max-height: 55dvh; }
+	}
+</style>

@@ -1,4 +1,8 @@
 # Packages
 
-- `theme-settings`: apariencia configurable desde el panel.
-- `pokemon-decklists`: listas Pokémon, arquetipos y base para resultados propios.
+| Carpeta | Paquete | Estado |
+| --- | --- | --- |
+| `theme-settings` | `@tcg-emdash/plugin-theme-settings` | usable |
+| `pokemon-decklists` | `@tcg-emdash/plugin-pokemon-decklists` | usable (MVP amplio) |
+
+Cómo instalarlos en un blog: ver el [README raíz](../README.md).

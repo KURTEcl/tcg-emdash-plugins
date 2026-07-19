@@ -4,9 +4,13 @@ import { serializePokemonDecklist } from "./parser.js";
 
 interface Props {
 	node: { deckId?: string; displayMode?: "images" | "text" | "both"; showResults?: boolean };
+	/** Modal chrome: one header with copy + close (no outer modal title bar). */
+	chrome?: "default" | "modal";
+	titleId?: string;
 }
 
-const { node } = Astro.props;
+const { node, chrome = "default", titleId } = Astro.props;
+const isModal = chrome === "modal";
 const displayMode = node.displayMode ?? "both";
 let deck: Decklist | null = null;
 let matches: MatchResult[] = [];
@@ -34,47 +38,41 @@ if (node.deckId) {
 }
 
 const text = deck ? serializePokemonDecklist(deck.cards) : "";
-const groups = deck ? (["pokemon", "trainer", "energy"] as const).map((category) => ({ category, cards: deck!.cards.filter((card) => card.category === category) })).filter((group) => group.cards.length) : [];
-const labels = { pokemon: "Pokémon", trainer: "Entrenadores", energy: "Energías" };
-const copyId = `deck-copy-${deck?.id ?? crypto.randomUUID()}`;
-const sprite = deck?.archetypePokemon?.[0];
-const spriteId = sprite && (sprite.spriteId ?? sprite.speciesId);
-const spriteUrl = spriteId ? `https://cdn.tcghub.cl/sprites/sprites/pokemon/${spriteId}.png` : undefined;
+const cards = deck ? (["pokemon", "trainer", "energy"] as const).flatMap((category) => deck!.cards.filter((card) => card.category === category)) : [];
+const instanceId = crypto.randomUUID();
+const copyId = `deck-copy-${instanceId}`;
+const cardDialogId = `deck-card-dialog-${instanceId}`;
+const lowImageUrl = (url?: string) => url?.replace(/\/high\.webp(?:\?.*)?$/, "/low.webp");
+const sprites = (deck?.archetypePokemon ?? []).slice(0, 2).flatMap((pokemon) => {
+	const id = pokemon.spriteId ?? pokemon.speciesId;
+	return id ? [{ ...pokemon, url: `https://cdn.tcghub.cl/sprites/sprites/pokemon/${id}.png` }] : [];
+});
 ---
 
 {deck ? (
-	<section class="tcg-deck" data-deck={deck.id}>
+	<section class:list={["tcg-deck", { "tcg-deck--modal": isModal }]} data-deck={deck.id}>
 		<header class="tcg-deck__header">
 			<div>
 				<p class="tcg-deck__eyebrow">DECKLIST · {deck.format.toUpperCase()}</p>
-				<h3>{deck.name}</h3>
-				<p>{deck.archetypeName} · {deck.totalCards} cartas</p>
+				<div class="tcg-deck__title" id={titleId}>{deck.name}</div>
 			</div>
-			{spriteUrl && <img class="tcg-deck__sprite" src={spriteUrl} alt={sprite?.name ?? deck.archetypeName} width="96" height="96" loading="lazy" />}
+			<div class="tcg-deck__header-actions">
+				{sprites.length > 0 && <div class="tcg-deck__sprites">{sprites.map((sprite) => <img class="tcg-deck__sprite" src={sprite.url} alt={sprite.name} width="56" height="56" loading="lazy" />)}</div>}
+				<button class="tcg-deck__copy" type="button" data-copy-target={copyId} data-copy-text={text} aria-label="Copiar lista" title="Copiar lista"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h10v10H8zM6 16H4V4h12v2" /></svg><span>Copiar lista</span></button>
+				{isModal && <button class="tcg-deck__close" type="button" data-close-deck aria-label="Cerrar visualizador" title="Cerrar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>}
+			</div>
 		</header>
 
-		{displayMode !== "text" && (
-			<div class="tcg-deck__groups">
-				{groups.map((group) => (
-					<section class="tcg-deck__group">
-						<h4>{labels[group.category]} <span>{group.cards.reduce((sum, card) => sum + card.quantity, 0)}</span></h4>
-						<div class="tcg-deck__cards">
-							{group.cards.map((card: DeckCard) => (
-								<figure class:list={["tcg-card", { "tcg-card--missing": !card.displayPrinting.imageUrl }]}>
-									{card.displayPrinting.imageUrl ? <img src={card.displayPrinting.imageUrl} alt={`${card.displayPrinting.name}, ${card.quantity} copias`} loading="lazy" decoding="async" /> : <div class="tcg-card__placeholder">{card.displayPrinting.name}</div>}
-									<figcaption><strong>{card.quantity}×</strong> {card.displayPrinting.name}</figcaption>
-								</figure>
-							))}
-						</div>
-					</section>
-				))}
-			</div>
-		)}
+		{displayMode === "both" && <div class="tcg-deck__tabs" role="tablist" aria-label="Vista del decklist"><button type="button" role="tab" aria-selected="true" data-deck-tab="cards">Cartas</button><button type="button" role="tab" aria-selected="false" data-deck-tab="text">Lista</button></div>}
+		{displayMode !== "text" && <div class="tcg-deck__panel" data-deck-panel="cards"><div class="tcg-deck__cards">{cards.map((card: DeckCard) => <figure class:list={["tcg-card", { "tcg-card--missing": !card.displayPrinting.imageUrl }]}><button class="tcg-card__open" type="button" data-card-open data-card-name={card.displayPrinting.name} data-card-quantity={card.quantity} data-card-set={card.displayPrinting.setCode ?? card.importedPrinting.setCode ?? ""} data-card-number={card.displayPrinting.collectorNumber ?? card.importedPrinting.collectorNumber ?? ""} data-card-rarity={card.displayPrinting.rarity ?? ""} data-card-image={card.displayPrinting.imageUrl ?? ""} data-card-search={`/decklists?card=${encodeURIComponent(card.displayPrinting.name)}`} aria-label={`Ver detalles de ${card.displayPrinting.name}`} title={`Ver detalles de ${card.displayPrinting.name}`}><span class="tcg-card__image">{card.displayPrinting.imageUrl ? <img src={lowImageUrl(card.displayPrinting.imageUrl)} alt={card.displayPrinting.name} loading="lazy" decoding="async" /> : <span class="tcg-card__placeholder">{card.displayPrinting.name}</span>}<strong class="tcg-card__quantity" aria-label={`${card.quantity} copias`}>{card.quantity}</strong></span></button></figure>)}</div></div>}
+		{displayMode !== "images" && <div class="tcg-deck__panel" data-deck-panel="text" hidden={displayMode === "both"}><pre class="tcg-deck__text" id={copyId}>{text}</pre></div>}
 
-		{displayMode !== "images" && <pre class="tcg-deck__text" id={copyId}>{text}</pre>}
-		<div class="tcg-deck__actions">
-			<button type="button" data-copy-target={copyId} data-copy-text={text}>Copiar lista</button>
-		</div>
+		<dialog class="tcg-card-modal" id={cardDialogId} data-card-dialog aria-labelledby={`${cardDialogId}-title`}>
+			<div class="tcg-card-modal__shell">
+				<div class="tcg-card-modal__bar"><strong id={`${cardDialogId}-title`} data-card-modal-title>Detalle de la carta</strong><button type="button" data-card-close aria-label="Cerrar detalle de la carta" title="Cerrar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+				<div class="tcg-card-modal__body"><div class="tcg-card-modal__media" data-card-modal-media></div><div class="tcg-card-modal__info"><p data-card-modal-quantity></p><dl><div data-card-modal-set-row><dt>Colección</dt><dd data-card-modal-set></dd></div><div data-card-modal-number-row><dt>Número</dt><dd data-card-modal-number></dd></div><div data-card-modal-rarity-row><dt>Rareza</dt><dd data-card-modal-rarity></dd></div></dl><a data-card-modal-search href="/decklists">Ver otros decklists con esta carta <span aria-hidden="true">→</span></a></div></div>
+			</div>
+		</dialog>
 
 		{node.showResults && stats.total > 0 && (
 			<section class="tcg-results">
@@ -90,34 +88,99 @@ const spriteUrl = spriteId ? `https://cdn.tcghub.cl/sprites/sprites/pokemon/${sp
 
 <script>
 	document.addEventListener("click", async (event) => {
+		const target = event.target as HTMLElement;
+		const cardButton = target.closest<HTMLButtonElement>("[data-card-open]");
+		if (cardButton) {
+			const deck = cardButton.closest<HTMLElement>("[data-deck]");
+			const dialog = deck?.querySelector<HTMLDialogElement>("[data-card-dialog]");
+			if (!dialog) return;
+			const name = cardButton.dataset.cardName ?? "Carta";
+			const imageUrl = cardButton.dataset.cardImage;
+			const media = dialog.querySelector<HTMLElement>("[data-card-modal-media]");
+			const title = dialog.querySelector<HTMLElement>("[data-card-modal-title]");
+			const quantity = dialog.querySelector<HTMLElement>("[data-card-modal-quantity]");
+			const search = dialog.querySelector<HTMLAnchorElement>("[data-card-modal-search]");
+			if (title) title.textContent = name;
+			if (quantity) quantity.textContent = `${cardButton.dataset.cardQuantity ?? "1"} ${cardButton.dataset.cardQuantity === "1" ? "copia en esta lista" : "copias en esta lista"}`;
+			if (media) { media.replaceChildren(); if (imageUrl) { const image = document.createElement("img"); image.src = imageUrl; image.alt = name; media.append(image); } }
+			for (const field of ["set", "number", "rarity"] as const) {
+				const value = cardButton.dataset[`card${field[0].toUpperCase()}${field.slice(1)}` as "cardSet" | "cardNumber" | "cardRarity"] ?? "";
+				const row = dialog.querySelector<HTMLElement>(`[data-card-modal-${field}-row]`);
+				const output = dialog.querySelector<HTMLElement>(`[data-card-modal-${field}]`);
+				if (row) row.hidden = !value;
+				if (output) output.textContent = value;
+			}
+			if (search) search.href = cardButton.dataset.cardSearch ?? "/decklists";
+			dialog.showModal();
+			return;
+		}
+		const cardClose = target.closest<HTMLButtonElement>("[data-card-close]");
+		if (cardClose) { cardClose.closest<HTMLDialogElement>("dialog")?.close(); return; }
+		if (target instanceof HTMLDialogElement && target.classList.contains("tcg-card-modal")) { target.close(); return; }
+		const tab = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-deck-tab]");
+		if (tab) {
+			const deck = tab.closest<HTMLElement>("[data-deck]");
+			if (!deck) return;
+			const selected = tab.dataset.deckTab;
+			deck.querySelectorAll<HTMLButtonElement>("[data-deck-tab]").forEach((item) => item.setAttribute("aria-selected", String(item === tab)));
+			deck.querySelectorAll<HTMLElement>("[data-deck-panel]").forEach((panel) => { panel.hidden = panel.dataset.deckPanel !== selected; });
+			return;
+		}
 		const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-copy-text]");
 		if (!button) return;
 		await navigator.clipboard.writeText(button.dataset.copyText ?? "");
-		const original = button.textContent;
-		button.textContent = "Lista copiada";
-		setTimeout(() => { button.textContent = original; }, 1800);
+		button.classList.add("is-copied");
+		button.setAttribute("aria-label", "Lista copiada");
+		setTimeout(() => { button.classList.remove("is-copied"); button.setAttribute("aria-label", "Copiar lista"); }, 1800);
 	});
 </script>
 
 <style>
-	.tcg-deck { --deck-line: color-mix(in srgb, currentColor 16%, transparent); margin: 2.5rem 0; border: 1px solid var(--deck-line); border-radius: 1.25rem; overflow: hidden; background: color-mix(in srgb, var(--color-background, #0b0b0b) 94%, currentColor 6%); }
-	.tcg-deck__header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: clamp(1.25rem, 4vw, 2rem); border-bottom: 1px solid var(--deck-line); }
-	.tcg-deck__eyebrow { margin: 0 0 .4rem; font-size: .72rem; letter-spacing: .14em; opacity: .62; }
-	.tcg-deck__header h3 { margin: 0; font-size: clamp(1.5rem, 4vw, 2.2rem); }
-	.tcg-deck__header p:last-child { margin: .45rem 0 0; opacity: .68; }
-	.tcg-deck__sprite { object-fit: contain; image-rendering: auto; flex: 0 0 auto; }
-	.tcg-deck__groups { padding: clamp(1rem, 4vw, 2rem); display: grid; gap: 2rem; }
-	.tcg-deck__group h4 { display: flex; align-items: center; gap: .55rem; margin: 0 0 1rem; font-size: .82rem; letter-spacing: .1em; text-transform: uppercase; }
-	.tcg-deck__group h4 span { opacity: .5; }
-	.tcg-deck__cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: .85rem; }
-	.tcg-card { min-width: 0; margin: 0; }
-	.tcg-card img, .tcg-card__placeholder { display: block; width: 100%; aspect-ratio: 245 / 342; border-radius: .55rem; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
+	.tcg-deck { --deck-line: color-mix(in srgb, currentColor 16%, transparent); margin: 1.75rem 0; border: 1px solid var(--deck-line); border-radius: 1rem; overflow: hidden; background: color-mix(in srgb, var(--color-background, #0b0b0b) 94%, currentColor 6%); }
+	.tcg-deck__header { display: flex; justify-content: space-between; gap: .75rem; align-items: center; padding: .85rem 1rem; border-bottom: 1px solid var(--deck-line); }
+	.tcg-deck__eyebrow { margin: 0 0 .2rem; font-size: .62rem; letter-spacing: .12em; opacity: .6; }
+	.tcg-deck__title { margin: 0; font-size: clamp(1.1rem, 3vw, 1.35rem); font-weight: 700; line-height: 1.2; }
+	.tcg-deck__header-actions,.tcg-deck__sprites { display: flex; align-items: center; }
+	.tcg-deck__header-actions { gap: .5rem; }
+	.tcg-deck__sprites { gap: .1rem; }
+	.tcg-deck__sprite { width: 48px; height: 48px; object-fit: contain; image-rendering: auto; flex: 0 0 auto; }
+	.tcg-deck__copy, .tcg-deck__close { width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 1px solid var(--deck-line); border-radius: 999px; color: inherit; background: transparent; cursor: pointer; }
+	.tcg-deck__copy svg, .tcg-deck__close svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+	.tcg-deck__copy span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+	.tcg-deck__copy.is-copied { color: #39a96b; border-color: currentColor; }
+	.tcg-deck--modal { border-radius: 0; border: 0; background: transparent; }
+	.tcg-deck--modal .tcg-deck__header { padding-inline: 1rem; }
+	.tcg-deck__tabs { display: flex; gap: .25rem; padding: .55rem .75rem; border-bottom: 1px solid var(--deck-line); }
+	.tcg-deck__tabs button { padding: .35rem .75rem; border: 0; border-radius: 999px; color: inherit; background: transparent; font: 600 .72rem/1 inherit; cursor: pointer; opacity: .62; }
+	.tcg-deck__tabs button[aria-selected="true"] { background: color-mix(in srgb, currentColor 10%, transparent); opacity: 1; }
+	.tcg-deck__panel[hidden] { display: none; }
+	.tcg-deck__panel { margin: 0 !important; padding: .3rem .6rem .6rem; }
+	.tcg-deck__cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .25rem; margin: 0 !important; padding: 0; }
+	.tcg-deck__cards > .tcg-card { min-width: 0; margin: 0 !important; }
+	.tcg-card__open { display: block; width: 100%; padding: 0; border: 0; border-radius: .55rem; color: inherit; background: transparent; cursor: pointer; }
+	.tcg-card__open:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+	.tcg-card__image { position: relative; width: 100%; aspect-ratio: 245 / 342; }
+	.tcg-card img, .tcg-card__placeholder { display: block; width: 100%; height: 100%; border-radius: .55rem; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
 	.tcg-card__placeholder { padding: .75rem; box-sizing: border-box; display: grid; place-items: center; text-align: center; font-size: .78rem; }
-	.tcg-card figcaption { margin-top: .45rem; font-size: .72rem; line-height: 1.35; opacity: .75; }
-	.tcg-card figcaption strong { opacity: 1; }
-	.tcg-deck__text { margin: 0; padding: clamp(1.25rem, 4vw, 2rem); border-top: 1px solid var(--deck-line); white-space: pre-wrap; overflow-x: auto; font: .82rem/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
-	.tcg-deck__actions { padding: 0 clamp(1.25rem, 4vw, 2rem) clamp(1.25rem, 4vw, 2rem); }
-	.tcg-deck__actions button { min-height: 44px; border: 1px solid currentColor; border-radius: 999px; padding: .65rem 1.1rem; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+	.tcg-card__quantity { position: absolute; bottom: .3rem; left: .3rem; min-width: 1.45rem; height: 1.45rem; display: grid; place-items: center; padding: 0 .25rem; border: 2px solid white; border-radius: 999px; color: white; background: #d72638; box-shadow: 0 2px 8px #0009; font: 800 .75rem/1 sans-serif; }
+	.tcg-card-modal { width: min(760px, calc(100vw - 2rem)); max-width: none; max-height: calc(100dvh - 2rem); margin: auto; padding: 0; border: 1px solid var(--deck-line); border-radius: 1rem; color: inherit; background: var(--color-background, #101010); box-shadow: 0 24px 80px #000b; overflow: hidden; }
+	.tcg-card-modal::backdrop { background: #000b; backdrop-filter: blur(4px); }
+	.tcg-card-modal__shell { display: grid; grid-template-rows: auto minmax(0,1fr); max-height: calc(100dvh - 2rem); }
+	.tcg-card-modal__bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--deck-line); }
+	.tcg-card-modal__bar > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tcg-card-modal__bar button { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; padding: 0; border: 1px solid var(--deck-line); border-radius: 999px; color: inherit; background: transparent; cursor: pointer; }
+	.tcg-card-modal__bar svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+	.tcg-card-modal__body { display: grid; grid-template-columns: minmax(220px, .8fr) 1fr; gap: 1.25rem; min-height: 0; overflow-y: auto; padding: 1rem; }
+	.tcg-card-modal__media { min-height: 220px; }
+	.tcg-card-modal__media :global(img) { display: block; width: 100%; max-height: calc(100dvh - 8rem); margin: 0; border-radius: .75rem; object-fit: contain; }
+	.tcg-card-modal__info { align-self: center; }
+	.tcg-card-modal__info > p { margin: 0 0 1rem; font-weight: 700; }
+	.tcg-card-modal__info dl { margin: 0 0 1.25rem; }
+	.tcg-card-modal__info dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--deck-line); }
+	.tcg-card-modal__info dt { opacity: .62; }
+	.tcg-card-modal__info dd { margin: 0; text-align: right; }
+	.tcg-card-modal .tcg-card-modal__info a { display: inline-flex; align-items: center; gap: .5rem; padding: .7rem 1rem; border-radius: 999px; color: var(--color-on-brand, white); background: var(--color-brand, #d72638); font-weight: 700; text-decoration: none; }
+	.tcg-deck__text { margin: 0; white-space: pre-wrap; overflow-x: auto; font: .76rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 	.tcg-results { border-top: 1px solid var(--deck-line); padding: clamp(1.25rem, 4vw, 2rem); }
 	.tcg-results__summary { display: flex; align-items: baseline; gap: .6rem; }
 	.tcg-results__summary strong { font-size: 2rem; }
@@ -126,5 +189,6 @@ const spriteUrl = spriteId ? `https://cdn.tcghub.cl/sprites/sprites/pokemon/${sp
 	.tcg-results li { display: flex; justify-content: space-between; gap: 1rem; padding: .65rem 0; border-top: 1px solid var(--deck-line); font-size: .82rem; }
 	.tcg-results .is-win { color: #39a96b; } .tcg-results .is-loss { color: #d85b5b; }
 	.tcg-deck--empty { padding: 1.25rem; }
-	@media (max-width: 600px) { .tcg-deck { margin-inline: -.5rem; border-radius: 1rem; } .tcg-deck__sprite { width: 72px; height: 72px; } .tcg-deck__cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; } .tcg-card figcaption { font-size: .65rem; } }
+	@media (max-width: 760px) { .tcg-deck__cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+	@media (max-width: 600px) { .tcg-deck { margin-inline: -.5rem; border-radius: .85rem; } .tcg-deck__header { padding: .7rem .75rem; } .tcg-deck__sprite { width: 38px; height: 38px; } .tcg-deck__sprites img:nth-child(2) { display: none; } .tcg-deck__cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .25rem; } .tcg-deck__panel { padding: .25rem .5rem .5rem; } .tcg-card-modal__body { grid-template-columns: 1fr; } .tcg-card-modal__media { min-height: 0; } .tcg-card-modal__media :global(img) { max-height: 55dvh; } }
 </style>

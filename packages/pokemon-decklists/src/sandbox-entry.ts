@@ -7,7 +7,7 @@ import { DEFAULT_SPRITE_BASE_URL } from "./sprites.js";
 import { getCard, isBasicEnergy, resolveBasicPrinting, searchCardCatalog, searchCards } from "./tcgdex.js";
 import { matchStats, roundResult } from "./results.js";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 const tournamentCategories = [
 	{ label: "Liga", value: "league" }, { label: "League Challenge", value: "challenge" }, { label: "League Cup", value: "cup" },
 	{ label: "Regional", value: "regional" }, { label: "Internacional", value: "international" }, { label: "Online", value: "online" },
@@ -25,6 +25,20 @@ export default definePlugin({
 		},
 	},
 	routes: {
+		"admin-data": {
+			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const [decks, archetypes, tournaments, matches] = await Promise.all([
+					ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 200 }),
+					ctx.storage.archetypes!.query({ orderBy: { updatedAt: "desc" }, limit: 200 }),
+					ctx.storage.tournaments!.query({ orderBy: { playedAt: "desc" }, limit: 200 }),
+					ctx.storage.matches!.query({ orderBy: { playedAt: "desc" }, limit: 500 }),
+				]);
+				return {
+					decks: decks.items.map((item) => item.data), archetypes: archetypes.items.map((item) => item.data),
+					tournaments: tournaments.items.map((item) => item.data), matches: matches.items.map((item) => item.data),
+				};
+			},
+		},
 		admin: {
 			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
 				const interaction = asInteraction(routeCtx.input);
@@ -50,6 +64,15 @@ export default definePlugin({
 		},
 		"card-options": {
 			handler: async (_routeCtx: StandardRouteContext, ctx: PluginContext) => ({ items: (await ctx.kv.get<Array<{ id: string; name: string }>>("recent-card-options")) ?? [] }),
+		},
+		"card-picker-search": {
+			handler: async (routeCtx: StandardRouteContext, ctx: PluginContext) => {
+				const query = new URL(routeCtx.request.url).searchParams.get("q")?.trim() ?? "";
+				if (query.length < 2) return { items: [] };
+				const language = (await ctx.kv.get("settings:cardLanguage") as string | null) ?? "en";
+				const cards = await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, query);
+				return { items: cards.filter((card) => card.image).map((card) => ({ id: card.id, name: card.name, number: String(card.localId), imageUrl: `${card.image}/low.webp` })) };
+			},
 		},
 		archetypes: {
 			public: true,
@@ -142,10 +165,14 @@ function asInteraction(input: unknown): Interaction {
 }
 
 async function handleForm(interaction: Interaction, ctx: PluginContext) {
-	if (interaction.action_id === "save_archetype") return saveArchetype(interaction.values, ctx);
+	if (interaction.action_id?.startsWith("save_archetype")) return saveArchetype(interaction.values, ctx, interaction.action_id.split(":")[1]);
 	if (interaction.action_id === "import_deck" || interaction.action_id === "update_deck") return saveDeck(interaction.action_id, interaction.values, ctx);
-	if (interaction.action_id === "save_tournament") return saveTournament(interaction.values, ctx);
-	if (interaction.action_id === "save_round") return saveRound(interaction.values, ctx);
+	if (interaction.action_id?.startsWith("update_deck:")) return saveDeck("update_deck", { ...interaction.values, id: interaction.action_id.split(":")[1] }, ctx);
+	if (interaction.action_id?.startsWith("save_tournament")) return saveTournament({ ...interaction.values, id: interaction.action_id.split(":")[1] || undefined }, ctx);
+	if (interaction.action_id?.startsWith("save_round:")) {
+		const [, tournamentId, id] = interaction.action_id.split(":");
+		return saveRound({ ...interaction.values, tournamentId, id: id || undefined }, ctx);
+	}
 	if (interaction.action_id === "search_cards") return renderCardSearch(ctx, optional(interaction.values.query));
 	return renderAdmin(ctx);
 }
@@ -153,6 +180,15 @@ async function handleForm(interaction: Interaction, ctx: PluginContext) {
 async function handleAction(interaction: Interaction, ctx: PluginContext) {
 	const id = interaction.value ?? String(interaction.values.id ?? "");
 	if (interaction.action_id === "edit_deck") return renderDeckEditor(ctx, id);
+	if (interaction.action_id === "new_deck") return renderDeckEditor(ctx);
+	if (interaction.action_id === "new_archetype") return renderArchetypeEditor(ctx);
+	if (interaction.action_id === "edit_archetype") return renderArchetypeEditor(ctx, id);
+	if (interaction.action_id === "delete_archetype") {
+		const decks = await ctx.storage.decks!.query({ orderBy: { createdAt: "desc" }, limit: 200 });
+		if (decks.items.some((item) => (item.data as Decklist).archetypeId === id)) return renderArchetypes(ctx, { error: "No puedes eliminar un arquetipo que todavía tiene decklists asociados" });
+		await ctx.storage.archetypes!.delete(id);
+		return renderArchetypes(ctx, { message: "Arquetipo eliminado" });
+	}
 	if (interaction.action_id === "duplicate_deck") {
 		const deck = await ctx.storage.decks!.get(id) as Decklist | null;
 		if (!deck) return renderAdmin(ctx, { error: "No se encontró el decklist" });
@@ -176,7 +212,12 @@ async function handleAction(interaction: Interaction, ctx: PluginContext) {
 		await ctx.storage.matches!.delete(id);
 		return renderResults(ctx, { message: "Resultado eliminado" });
 	}
+	if (interaction.action_id === "delete_round") {
+		await ctx.storage.matches!.delete(id);
+		return renderResults(ctx, { message: "Ronda eliminada" });
+	}
 	if (interaction.action_id === "add_round") return renderRoundEditor(ctx, id);
+	if (interaction.action_id === "new_tournament") return renderTournamentEditor(ctx);
 	if (interaction.action_id === "edit_tournament") return renderTournamentEditor(ctx, id);
 	if (interaction.action_id === "edit_round") {
 		const round = await ctx.storage.matches!.get(id) as MatchResult | null;
@@ -191,12 +232,13 @@ async function handleAction(interaction: Interaction, ctx: PluginContext) {
 	return renderAdmin(ctx);
 }
 
-async function saveArchetype(values: Record<string, unknown>, ctx: PluginContext) {
+async function saveArchetype(values: Record<string, unknown>, ctx: PluginContext, existingId?: string) {
 	const name = String(values.name ?? "").trim();
 	const pokemon = await resolveArchetypePokemon(values, ctx);
 	if (!name || !pokemon.length) return renderArchetypes(ctx, { error: "Indica un nombre y al menos un Pokémon válido" });
-	const id = slugify(name);
+	const id = existingId || slugify(name);
 	const existing = await ctx.storage.archetypes!.get(id) as Archetype | null;
+	if (!existingId && existing) return renderArchetypeEditor(ctx, undefined, { error: "Ya existe un arquetipo con ese nombre" });
 	const now = new Date().toISOString();
 	await ctx.storage.archetypes!.put(id, { id, name, game: "pokemon", pokemon, createdAt: existing?.createdAt ?? now, updatedAt: now });
 	return renderArchetypes(ctx, { message: `Arquetipo ${name} guardado` });
@@ -208,9 +250,13 @@ async function saveDeck(action: string, values: Record<string, unknown>, ctx: Pl
 	const archetype = await ctx.storage.archetypes!.get(String(values.archetypeId ?? "")) as Archetype | null;
 	if (!archetype) return renderAdmin(ctx, { error: "Selecciona un arquetipo existente" });
 	const existing = action === "update_deck" ? await ctx.storage.decks!.get(String(values.id ?? "")) as Decklist | null : null;
+	const selectedSecondary = optional(values.secondaryPokemon)
+		? await getArchetypePokemon((url, init) => ctx.http!.fetch(String(url), init), String(values.secondaryPokemon), "secondary", 1)
+		: null;
+	const archetypePokemon = [archetype.pokemon[0], selectedSecondary ?? existing?.archetypePokemon?.[1] ?? archetype.pokemon[1]].filter((pokemon): pokemon is ArchetypePokemon => Boolean(pokemon));
 	const now = new Date().toISOString();
 	const id = existing?.id ?? crypto.randomUUID();
-	const deck: Decklist = { id, name: String(values.name ?? archetype.name).trim() || "Decklist", archetypeId: archetype.id, archetypeName: archetype.name, archetypePokemon: archetype.pokemon, format: asFormat(values.format), language: existing?.language ?? "en", source: existing?.source ?? "ptcgl", cards: reuseResolvedCards(parsed.cards, existing?.cards), totalCards: parsed.totalCards, createdAt: existing?.createdAt ?? now, updatedAt: now };
+	const deck: Decklist = { id, name: String(values.name ?? archetype.name).trim() || "Decklist", archetypeId: archetype.id, archetypeName: archetype.name, archetypePokemon, format: asFormat(values.format), language: existing?.language ?? "en", source: existing?.source ?? "ptcgl", cards: reuseResolvedCards(parsed.cards, existing?.cards), totalCards: parsed.totalCards, createdAt: existing?.createdAt ?? now, updatedAt: now };
 	const normalized = await normalizeDeck(deck, ctx);
 	await ctx.storage.decks!.put(id, normalized.deck);
 	return renderAdmin(ctx, { message: `${existing ? "Decklist actualizado" : "Lista guardada"} con ${deck.totalCards} cartas · ${normalized.resolved} imágenes listas${normalized.unresolved ? ` · ${normalized.unresolved} pendientes` : ""}` });
@@ -266,55 +312,84 @@ async function saveRound(values: Record<string, unknown>, ctx: PluginContext) {
 async function renderAdmin(ctx: any, notice: Notice = {}) {
 	const [result, archetypeResult] = await Promise.all([ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 50 }), ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 })]);
 	const archetypes = archetypeResult.items.map((item: { data: Archetype }) => item.data);
-	const blocks: any[] = [{ type: "header", text: "Decklists Pokémon" }, { type: "section", text: "Importa listas desde Pokémon TCG Live o Limitless. Puedes editarlas desde el celular, duplicarlas y normalizar sus imágenes hacia impresiones básicas." }];
+	const decks: Decklist[] = result.items.map((item: { data: Decklist }) => item.data);
+	const blocks: any[] = [{ type: "header", text: "Decklists Pokémon" }, { type: "section", text: "Administra listas importadas desde Pokémon TCG Live o Limitless." }, { type: "stats", items: [{ label: "Decklists", value: String(decks.length) }, { label: "Arquetipos", value: String(archetypes.length) }, { label: "Cartas pendientes", value: String(decks.reduce((sum, deck) => sum + deck.cards.filter((card) => !card.displayPrinting.imageUrl).length, 0)) }] }];
 	addNotice(blocks, notice);
 	if (!archetypes.length) blocks.push({ type: "banner", title: "Primero crea un arquetipo", description: "Abre Arquetipos Pokémon y selecciona uno o dos Pokémon.", variant: "alert" });
-	else blocks.push(deckForm(archetypes, undefined, "import_deck"));
-	for (const item of result.items as Array<{ data: Decklist }>) blocks.push(...deckCard(item.data));
+	else blocks.push({ type: "actions", elements: [{ type: "button", action_id: "new_deck", label: "Nueva decklist", style: "primary" }] });
+	if (!decks.length) blocks.push({ type: "empty", title: "No hay decklists", description: "Importa tu primera lista para comenzar.", actions: [{ label: "Nueva decklist", action_id: "new_deck" }] });
+	else {
+		blocks.push({
+			type: "table", block_id: "decklists-table", page_action_id: "page_decks",
+			columns: [
+				{ key: "name", label: "Nombre" }, { key: "archetype", label: "Arquetipo" },
+				{ key: "format", label: "Formato", format: "badge" }, { key: "cards", label: "Cartas", format: "number" },
+				{ key: "images", label: "Imágenes" }, { key: "updated", label: "Actualizado", format: "relative_time" },
+			],
+			rows: decks.map((deck) => ({ name: deck.name, archetype: deck.archetypeName, format: deck.format, cards: deck.totalCards, images: deck.cards.some((card) => !card.displayPrinting.imageUrl) ? "Pendientes" : "Listas", updated: deck.updatedAt })),
+			empty_text: "No hay decklists",
+		});
+		blocks.push({ type: "section", text: "Acciones" });
+		for (const deck of decks) blocks.push(deckActions(deck));
+	}
 	return response(blocks, notice);
 }
 
-async function renderDeckEditor(ctx: any, id: string) {
-	const [deck, archetypeResult] = await Promise.all([ctx.storage.decks.get(id), ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 })]);
-	if (!deck) return renderAdmin(ctx, { error: "No se encontró el decklist" });
+async function renderDeckEditor(ctx: any, id?: string) {
+	const [deck, archetypeResult, pokemonOptions] = await Promise.all([id ? ctx.storage.decks.get(id) : null, ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 }), getCachedPokemonOptions(ctx)]);
+	if (id && !deck) return renderAdmin(ctx, { error: "No se encontró el decklist" });
 	const archetypes = archetypeResult.items.map((item: { data: Archetype }) => item.data);
-	return { blocks: [{ type: "header", text: `Editar: ${deck.name}` }, { type: "section", text: "Al guardar se conservan las imágenes existentes y se normalizan automáticamente las cartas nuevas. Sólo las energías básicas ignoran su edición; energías especiales y ACE SPEC mantienen su carta exacta." }, deckForm(archetypes, deck, "update_deck") ] };
+	return { blocks: [{ type: "header", text: deck ? `Editar: ${deck.name}` : "Nueva decklist" }, { type: "section", text: "Pega una lista exportada. Puedes reemplazar el Pokémon secundario del arquetipo para representar esta variante." }, deckForm(archetypes, pokemonOptions, deck ?? undefined, deck ? `update_deck:${deck.id}` : "import_deck") ] };
 }
 
-function deckForm(archetypes: Archetype[], deck?: Decklist, action = "import_deck") {
+function deckForm(archetypes: Archetype[], pokemonOptions: PokemonOption[], deck?: Decklist, action = "import_deck") {
 	return { type: "form", block_id: deck ? `deck-edit-${deck.id}` : "deck-import", fields: [
-		...(deck ? [{ type: "text_input", action_id: "id", label: "ID del decklist (no modificar)", initial_value: deck.id }] : []),
 		{ type: "text_input", action_id: "name", label: "Nombre de esta lista", initial_value: deck?.name },
 		{ type: "select", action_id: "archetypeId", label: "Arquetipo", options: archetypes.map((item) => ({ label: item.name, value: item.id })), initial_value: deck?.archetypeId },
+		{ type: "combobox", action_id: "secondaryPokemon", label: "Pokémon secundario de esta variante (opcional)", placeholder: "Buscar Pokémon de soporte…", options: pokemonOptions, initial_value: pokemonSelection(deck?.archetypePokemon?.[1]) },
 		{ type: "select", action_id: "format", label: "Formato", options: [{ label: "Standard", value: "standard" }, { label: "Expanded", value: "expanded" }, { label: "GLC", value: "glc" }, { label: "Personalizado", value: "custom" }], initial_value: deck?.format ?? "standard" },
 		{ type: "text_input", action_id: "deckText", label: "Lista exportada", multiline: true, initial_value: deck ? serializePokemonDecklist(deck.cards, true) : undefined },
 	], submit: { label: deck ? "Guardar cambios" : "Importar lista", action_id: action } };
 }
 
-function deckCard(deck: Decklist) {
-	return [{ type: "section", text: `**${deck.name}**\n${deck.archetypeName} · ${deck.format} · ${deck.totalCards} cartas` }, { type: "actions", elements: [
+function deckActions(deck: Decklist) {
+	return { type: "accordion", label: deck.name, blocks: [{ type: "actions", elements: [
 		{ type: "button", action_id: "edit_deck", label: "Editar", value: deck.id },
 		{ type: "button", action_id: "normalize_deck", label: "Normalizar imágenes", value: deck.id },
 		{ type: "button", action_id: "duplicate_deck", label: "Duplicar", value: deck.id },
 		{ type: "button", action_id: "delete_deck", label: "Eliminar", style: "danger", value: deck.id, confirm: { title: "Eliminar decklist", text: "Esta acción no elimina el artículo que lo use.", confirm: "Eliminar", deny: "Cancelar" } },
-	] }];
+	] }] };
 }
 
 async function renderArchetypes(ctx: any, notice: Notice = {}) {
-	const [result, pokemonOptions] = await Promise.all([ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 }), getCachedPokemonOptions(ctx)]);
-	const blocks: any[] = [{ type: "header", text: "Arquetipos Pokémon" }, { type: "section", text: "Busca Pokémon por nombre; incluye especies, formas regionales y Mega Evoluciones. Puedes usar uno o dos Pokémon por arquetipo." }];
+	const result = await ctx.storage.archetypes.query({ orderBy: { updatedAt: "desc" }, limit: 100 });
+	const archetypes: Archetype[] = result.items.map((item: { data: Archetype }) => item.data);
+	const blocks: any[] = [{ type: "header", text: "Arquetipos Pokémon" }, { type: "section", text: "Crea, edita y elimina arquetipos de uno o dos Pokémon." }, { type: "stats", items: [{ label: "Arquetipos", value: String(archetypes.length) }] }, { type: "actions", elements: [{ type: "button", action_id: "new_archetype", label: "Nuevo arquetipo", style: "primary" }] }];
 	addNotice(blocks, notice);
-	blocks.push({ type: "form", block_id: "archetype-form", fields: [
-		{ type: "text_input", action_id: "name", label: "Nombre del arquetipo", placeholder: "N's Zoroark / Munkidori" },
-		{ type: "combobox", action_id: "primaryPokemon", label: "Pokémon principal", placeholder: "Buscar Zoroark, Charizard, Mega…", options: pokemonOptions },
-		{ type: "combobox", action_id: "secondaryPokemon", label: "Segundo Pokémon (opcional)", placeholder: "Buscar otro Pokémon…", options: pokemonOptions },
-	], submit: { label: "Guardar arquetipo", action_id: "save_archetype" } });
-	for (const item of result.items as Array<{ data: Archetype }>) blocks.push({ type: "section", text: `**${item.data.name}**\n${item.data.pokemon.map((pokemon) => pokemon.name).join(" / ")}` });
+	if (!archetypes.length) blocks.push({ type: "empty", title: "No hay arquetipos", description: "Crea el primero para asociar decklists." });
+	else {
+		blocks.push({ type: "table", block_id: "archetypes-table", page_action_id: "page_archetypes", columns: [{ key: "name", label: "Nombre" }, { key: "pokemon", label: "Pokémon" }, { key: "updated", label: "Actualizado", format: "relative_time" }], rows: archetypes.map((archetype) => ({ name: archetype.name, pokemon: archetype.pokemon.map((pokemon) => pokemon.name).join(" / "), updated: archetype.updatedAt })), empty_text: "No hay arquetipos" });
+		blocks.push({ type: "section", text: "Acciones" });
+		for (const archetype of archetypes) blocks.push({ type: "accordion", label: archetype.name, blocks: [{ type: "actions", elements: [{ type: "button", action_id: "edit_archetype", label: "Editar", value: archetype.id }, { type: "button", action_id: "delete_archetype", label: "Eliminar", style: "danger", value: archetype.id, confirm: { title: "Eliminar arquetipo", text: "Sólo se puede eliminar si no tiene decklists asociados.", confirm: "Eliminar", deny: "Cancelar" } }] }] });
+	}
+	return response(blocks, notice);
+}
+
+async function renderArchetypeEditor(ctx: any, id?: string, notice: Notice = {}) {
+	const [archetype, pokemonOptions] = await Promise.all([id ? ctx.storage.archetypes.get(id) : null, getCachedPokemonOptions(ctx)]);
+	if (id && !archetype) return renderArchetypes(ctx, { error: "No se encontró el arquetipo" });
+	const blocks: any[] = [{ type: "header", text: archetype ? `Editar: ${archetype.name}` : "Nuevo arquetipo" }, { type: "section", text: "Busca por nombre; incluye formas regionales y Mega Evoluciones." }];
+	addNotice(blocks, notice);
+	blocks.push({ type: "form", block_id: archetype ? `archetype-${archetype.id}` : "archetype-new", fields: [
+		{ type: "text_input", action_id: "name", label: "Nombre del arquetipo", placeholder: "N's Zoroark / Munkidori", initial_value: archetype?.name },
+		{ type: "combobox", action_id: "primaryPokemon", label: "Pokémon principal", placeholder: "Buscar Zoroark, Charizard, Mega…", options: pokemonOptions, initial_value: pokemonSelection(archetype?.pokemon[0]) },
+		{ type: "combobox", action_id: "secondaryPokemon", label: "Segundo Pokémon (opcional)", placeholder: "Buscar otro Pokémon…", options: pokemonOptions, initial_value: pokemonSelection(archetype?.pokemon[1]) },
+	], submit: { label: archetype ? "Guardar cambios" : "Crear arquetipo", action_id: archetype ? `save_archetype:${archetype.id}` : "save_archetype" } });
 	return response(blocks, notice);
 }
 
 async function renderCardSearch(ctx: any, query?: string, notice: Notice = {}) {
-	const blocks: any[] = [{ type: "header", text: "Buscar cartas Pokémon" }, { type: "section", text: "Busca por nombre. Los resultados quedarán disponibles en el selector del bloque **Carta Pokémon** dentro del editor de publicaciones." }];
+	const blocks: any[] = [{ type: "header", text: "Buscar cartas Pokémon" }, { type: "section", text: "Busca en TCGDex. Los resultados quedarán disponibles en el bloque Carta Pokémon del editor." }];
 	addNotice(blocks, notice);
 	blocks.push({ type: "form", block_id: "card-search", fields: [{ type: "text_input", action_id: "query", label: "Nombre de la carta", placeholder: "Zoroark, Rare Candy, Energy…", initial_value: query }], submit: { label: "Buscar en TCGDex", action_id: "search_cards" } });
 	if (!query) return response(blocks, notice);
@@ -323,10 +398,7 @@ async function renderCardSearch(ctx: any, query?: string, notice: Notice = {}) {
 		const cards = await searchCardCatalog((url, init) => ctx.http!.fetch(String(url), init), language, query);
 		await ctx.kv.set("recent-card-options", cards.map((card) => ({ id: card.id, name: `${card.name} · ${card.id}` })));
 		if (!cards.length) blocks.push({ type: "banner", title: "Sin resultados", description: "Prueba con una parte más corta del nombre.", variant: "alert" });
-		for (const card of cards.slice(0, 20)) {
-			if (card.image) blocks.push({ type: "image", url: `${card.image}/low.webp`, alt: card.name });
-			blocks.push({ type: "section", text: `**${card.name}**\nID TCGDex: \`${card.id}\` · número ${card.localId}` });
-		}
+		if (cards.length) blocks.push({ type: "table", block_id: "card-search-results", page_action_id: "page_cards", columns: [{ key: "name", label: "Carta" }, { key: "number", label: "Número" }, { key: "id", label: "ID TCGDex" }], rows: cards.map((card) => ({ name: card.name, number: String(card.localId), id: card.id })), empty_text: "Sin resultados" });
 	} catch { blocks.push({ type: "banner", title: "No se pudo consultar TCGDex", variant: "error" }); }
 	return response(blocks, notice);
 }
@@ -336,40 +408,49 @@ async function renderResults(ctx: any, notice: Notice = {}) {
 	const decks = decksResult.items.map((item: { data: Decklist }) => item.data);
 	const tournaments: TournamentResult[] = tournamentsResult.items.map((item: { data: TournamentResult }) => item.data);
 	const matches: MatchResult[] = matchesResult.items.map((item: { data: MatchResult }) => item.data);
-	const blocks: any[] = [{ type: "header", text: "Torneos y resultados" }, { type: "section", text: "Crea un torneo con su fecha y decklist. Luego registra cada ronda, el arquetipo rival y el resultado de sus partidas, siguiendo el modelo de Training Court." }];
+	const blocks: any[] = [{ type: "header", text: "Torneos y resultados" }, { type: "section", text: "Administra torneos y sus rondas siguiendo el modelo de Training Court." }, { type: "stats", items: [{ label: "Torneos", value: String(tournaments.length) }, { label: "Rondas", value: String(matches.filter((match) => match.tournamentId).length) }, { label: "Resultados anteriores", value: String(matches.filter((match) => !match.tournamentId).length) }] }];
 	addNotice(blocks, notice);
 	if (!decks.length) blocks.push({ type: "banner", title: "Primero importa un decklist", variant: "alert" });
-	else blocks.push(tournamentForm(decks));
+	else blocks.push({ type: "actions", elements: [{ type: "button", action_id: "new_tournament", label: "Nuevo torneo", style: "primary" }] });
 	const names = new Map(decks.map((deck: Decklist) => [deck.id, deck.name]));
+	if (tournaments.length) blocks.push({
+		type: "table", block_id: "tournaments-table", page_action_id: "page_tournaments",
+		columns: [{ key: "event", label: "Torneo" }, { key: "date", label: "Fecha" }, { key: "deck", label: "Decklist" }, { key: "record", label: "Resultado" }, { key: "placement", label: "Posición" }, { key: "visibility", label: "Visibilidad", format: "badge" }],
+		rows: tournaments.map((tournament) => {
+			const rounds = matches.filter((match) => match.tournamentId === tournament.id);
+			const stats = matchStats(rounds);
+			return { event: tournament.name, date: tournament.playedAt, deck: names.get(tournament.deckId) ?? "Decklist", record: `${stats.wins}-${stats.losses}-${stats.draws}`, placement: tournament.placement ?? "—", visibility: tournament.visibility === "public" ? "Público" : "Privado" };
+		}), empty_text: "No hay torneos",
+	});
+	else if (decks.length) blocks.push({ type: "empty", title: "No hay torneos", description: "Registra un torneo y luego agrega sus rondas." });
 	for (const tournament of tournaments) {
 		const rounds = matches.filter((match) => match.tournamentId === tournament.id).sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
-		const stats = matchStats(rounds);
-		blocks.push({ type: "section", text: `**${tournament.name}**\n${tournament.playedAt} · ${names.get(tournament.deckId) ?? "Decklist"}${tournament.placement ? ` · ${tournament.placement}` : ""} · ${stats.wins}-${stats.losses}-${stats.draws} · ${tournament.visibility}` });
-		blocks.push({ type: "actions", elements: [
-			{ type: "button", action_id: "add_round", label: "Agregar ronda", value: tournament.id },
-			{ type: "button", action_id: "edit_tournament", label: "Editar torneo", value: tournament.id },
+		const tournamentBlocks: any[] = [{ type: "actions", elements: [
+			{ type: "button", action_id: "add_round", label: "Agregar ronda", value: tournament.id }, { type: "button", action_id: "edit_tournament", label: "Editar torneo", value: tournament.id },
 			{ type: "button", action_id: "delete_tournament", label: "Eliminar torneo", style: "danger", value: tournament.id, confirm: { title: "Eliminar torneo", text: "También se eliminarán todas sus rondas.", confirm: "Eliminar", deny: "Cancelar" } },
-		] });
-		for (const match of rounds) blocks.push({ type: "section", text: `Ronda ${match.round} · **${labelResult(match.result)}**${match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}${match.games?.length ? ` · ${match.games.map((game) => game.result[0].toUpperCase()).join("")}` : ""}`, accessory: { type: "button", action_id: "edit_round", label: "Editar", value: match.id } });
+		] }];
+		if (rounds.length) tournamentBlocks.push({ type: "table", block_id: `rounds-${tournament.id}`, page_action_id: "page_rounds", columns: [{ key: "round", label: "Ronda", format: "number" }, { key: "opponent", label: "Rival" }, { key: "result", label: "Resultado", format: "badge" }, { key: "games", label: "Partidas" }], rows: rounds.map((match) => ({ round: match.round, opponent: match.opponentArchetype || "—", result: labelResult(match.result), games: match.games?.length ? match.games.map((game) => game.result[0].toUpperCase()).join("") : "—" })), empty_text: "Sin rondas" });
+		for (const match of rounds) tournamentBlocks.push({ type: "accordion", label: `Ronda ${match.round} · ${match.opponentArchetype || labelResult(match.result)}`, blocks: [{ type: "actions", elements: [{ type: "button", action_id: "edit_round", label: "Editar", value: match.id }, { type: "button", action_id: "delete_round", label: "Eliminar", style: "danger", value: match.id, confirm: { title: "Eliminar ronda", text: "Esta acción no se puede deshacer.", confirm: "Eliminar", deny: "Cancelar" } }] }] });
+		blocks.push({ type: "accordion", label: `${tournament.name} · acciones y rondas`, blocks: tournamentBlocks });
 	}
 	const legacy = matches.filter((match) => !match.tournamentId);
 	if (legacy.length) {
-		blocks.push({ type: "divider" }, { type: "section", text: "**Resultados anteriores**\nSe conservan para compatibilidad; los nuevos resultados se organizan por torneo y ronda." });
-		for (const match of legacy) blocks.push({ type: "section", text: `**${labelResult(match.result)} · ${names.get(match.deckId) ?? "Decklist"}**\n${match.playedAt}${match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}${match.eventName ? ` · ${match.eventName}` : ""}`, accessory: { type: "button", action_id: "delete_result", label: "Eliminar", style: "danger", value: match.id } });
+		blocks.push({ type: "divider" }, { type: "section", text: "Resultados anteriores\nSe conservan para compatibilidad; los nuevos resultados se organizan por torneo y ronda." });
+		blocks.push({ type: "table", block_id: "legacy-results", page_action_id: "page_legacy", columns: [{ key: "date", label: "Fecha" }, { key: "deck", label: "Decklist" }, { key: "opponent", label: "Rival" }, { key: "result", label: "Resultado", format: "badge" }], rows: legacy.map((match) => ({ date: match.playedAt, deck: names.get(match.deckId) ?? "Decklist", opponent: match.opponentArchetype ?? "—", result: labelResult(match.result) })), empty_text: "Sin resultados anteriores" });
+		for (const match of legacy) blocks.push({ type: "accordion", label: `${match.playedAt} · ${names.get(match.deckId) ?? "Decklist"}`, blocks: [{ type: "actions", elements: [{ type: "button", action_id: "delete_result", label: "Eliminar", style: "danger", value: match.id }] }] });
 	}
 	return response(blocks, notice);
 }
 
-async function renderTournamentEditor(ctx: any, id: string) {
-	const [tournament, decksResult] = await Promise.all([ctx.storage.tournaments.get(id), ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 100 })]);
-	if (!tournament) return renderResults(ctx, { error: "No se encontró el torneo" });
+async function renderTournamentEditor(ctx: any, id?: string) {
+	const [tournament, decksResult] = await Promise.all([id ? ctx.storage.tournaments.get(id) : null, ctx.storage.decks.query({ orderBy: { createdAt: "desc" }, limit: 100 })]);
+	if (id && !tournament) return renderResults(ctx, { error: "No se encontró el torneo" });
 	const decks: Decklist[] = decksResult.items.map((item: { data: Decklist }) => item.data);
-	return { blocks: [{ type: "header", text: `Editar torneo · ${tournament.name}` }, tournamentForm(decks, tournament)] };
+	return { blocks: [{ type: "header", text: tournament ? `Editar torneo · ${tournament.name}` : "Nuevo torneo" }, tournamentForm(decks, tournament ?? undefined)] };
 }
 
 function tournamentForm(decks: Decklist[], tournament?: TournamentResult) {
 	return { type: "form", block_id: tournament ? `tournament-${tournament.id}` : "tournament-form", fields: [
-		...(tournament ? [{ type: "text_input", action_id: "id", label: "ID del torneo (no modificar)", initial_value: tournament.id }] : []),
 		{ type: "select", action_id: "deckId", label: "Decklist", options: decks.map((deck) => ({ label: deck.name, value: deck.id })), initial_value: tournament?.deckId },
 		{ type: "text_input", action_id: "eventName", label: "Nombre del torneo", placeholder: "League Challenge, Regional…", initial_value: tournament?.name },
 		{ type: "date_input", action_id: "playedAt", label: "Fecha de inicio", initial_value: tournament?.playedAt ?? new Date().toISOString().slice(0, 10) },
@@ -379,7 +460,7 @@ function tournamentForm(decks: Decklist[], tournament?: TournamentResult) {
 		{ type: "text_input", action_id: "placement", label: "Posición final (opcional)", placeholder: "Top 8, 12.º…", initial_value: tournament?.placement },
 		{ type: "text_input", action_id: "notes", label: "Notas", multiline: true, initial_value: tournament?.notes },
 		{ type: "select", action_id: "visibility", label: "Visibilidad", options: [{ label: "Público", value: "public" }, { label: "Privado", value: "private" }], initial_value: tournament?.visibility ?? "public" },
-	], submit: { label: tournament ? "Guardar torneo" : "Crear torneo y agregar rondas", action_id: "save_tournament" } };
+	], submit: { label: tournament ? "Guardar torneo" : "Crear torneo y agregar rondas", action_id: tournament ? `save_tournament:${tournament.id}` : "save_tournament" } };
 }
 
 async function renderRoundEditor(ctx: any, tournamentId: string, match?: MatchResult, notice: Notice = {}) {
@@ -390,15 +471,13 @@ async function renderRoundEditor(ctx: any, tournamentId: string, match?: MatchRe
 	const blocks: any[] = [{ type: "header", text: `${match ? "Editar" : "Agregar"} ronda · ${tournament.name}` }, { type: "section", text: "Busca uno o dos Pokémon para representar el arquetipo rival. Registra hasta tres partidas; el resultado de la ronda se calcula automáticamente." }];
 	addNotice(blocks, notice);
 	blocks.push({ type: "form", block_id: `round-${match?.id ?? "new"}`, fields: [
-		{ type: "text_input", action_id: "tournamentId", label: "ID del torneo (no modificar)", initial_value: tournamentId },
-		...(match ? [{ type: "text_input", action_id: "id", label: "ID de la ronda (no modificar)", initial_value: match.id }] : []),
 		{ type: "number_input", action_id: "round", label: "Número de ronda", min: 1, initial_value: nextRound },
 		{ type: "combobox", action_id: "opponentPrimaryPokemon", label: "Pokémon principal del rival", placeholder: "Buscar Charizard, Dragapult, Mega…", options: pokemonOptions, initial_value: pokemonSelection(match?.opponentPokemon?.[0]) },
 		{ type: "combobox", action_id: "opponentSecondaryPokemon", label: "Segundo Pokémon rival (opcional)", placeholder: "Buscar otro Pokémon…", options: pokemonOptions, initial_value: pokemonSelection(match?.opponentPokemon?.[1]) },
 		{ type: "select", action_id: "specialOutcome", label: "Resultado especial", options: [{ label: "Partida normal", value: "normal" }, { label: "BYE", value: "bye" }, { label: "Rival ausente", value: "no-show" }, { label: "Empate intencional", value: "intentional-draw" }], initial_value: match?.specialOutcome ?? "normal" },
 		...gameFields(match),
 		{ type: "text_input", action_id: "notes", label: "Notas de la ronda", multiline: true, initial_value: match?.notes },
-	], submit: { label: match ? "Guardar cambios" : "Guardar ronda", action_id: "save_round" } });
+	], submit: { label: match ? "Guardar cambios" : "Guardar ronda", action_id: `save_round:${tournamentId}:${match?.id ?? ""}` } });
 	return response(blocks, notice);
 }
 

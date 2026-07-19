@@ -1,7 +1,7 @@
 ---
-interface Props { node: { cardId?: string; name?: string; setCode?: string; collectorNumber?: string; caption?: string; size?: "small" | "medium" | "large" } }
+interface Props { node: { cardId?: string; name?: string; setCode?: string; collectorNumber?: string; caption?: string; description?: string; size?: "small" | "medium" | "large"; alignment?: "left" | "center" | "right" } }
 const { node } = Astro.props;
-let card: { name: string; image?: string; localId?: string | number; rarity?: string } | undefined;
+let card: { name: string; image?: string; localId?: string | number; rarity?: string; set?: { name?: string; id?: string } } | undefined;
 if (node.cardId || node.name) {
 	try {
 		const endpoint = new URL("/_emdash/api/plugins/pokemon-decklists/cards/display", Astro.url.origin);
@@ -13,12 +13,123 @@ if (node.cardId || node.name) {
 		if (response.ok) { const body = await response.json(); card = (body.data ?? body).selected; }
 	} catch { /* Render placeholder. */ }
 }
+const cardName = card?.name ?? node.name ?? "Carta Pokémon";
 const imageUrl = card?.image ? `${card.image}/high.webp` : undefined;
+const setLabel = card?.set?.name ?? card?.set?.id ?? node.setCode ?? "";
+const numberLabel = card?.localId != null ? String(card.localId) : node.collectorNumber ?? "";
+const rarityLabel = card?.rarity ?? "";
+const instanceId = crypto.randomUUID();
+const dialogId = `pokemon-card-dialog-${instanceId}`;
 ---
-<figure class:list={["pokemon-card-inline", `is-${node.size ?? "medium"}`]}>
-	{imageUrl ? <img src={imageUrl} alt={node.name ?? card?.name ?? "Carta Pokémon"} loading="lazy" decoding="async" /> : <div class="placeholder">No se encontró {node.name ?? "la carta"}</div>}
-	<figcaption>{node.caption || [card?.name ?? node.name, node.setCode, node.collectorNumber].filter(Boolean).join(" ")}</figcaption>
-</figure>
+<div class:list={["pokemon-card-layout", `align-${node.alignment ?? "left"}`, { "has-description": node.description }]} data-inline-card>
+	<figure class:list={["pokemon-card-inline", `is-${node.size ?? "medium"}`]}>
+		{imageUrl ? (
+			<button
+				type="button"
+				class="card-open"
+				data-inline-card-open
+				data-card-name={cardName}
+				data-card-set={setLabel}
+				data-card-number={numberLabel}
+				data-card-rarity={rarityLabel}
+				data-card-image={imageUrl}
+				data-card-search={`/decklists?card=${encodeURIComponent(cardName)}`}
+				aria-label={`Ver detalles de ${cardName}`}
+				title={`Ver detalles de ${cardName}`}
+			>
+				<img src={imageUrl} alt={cardName} loading="lazy" decoding="async" />
+			</button>
+		) : (
+			<div class="placeholder">No se encontró {node.name ?? "la carta"}</div>
+		)}
+		<figcaption>{node.caption || [card?.name ?? node.name, node.setCode, node.collectorNumber].filter(Boolean).join(" ")}</figcaption>
+	</figure>
+	{node.description && <p class="card-description">{node.description}</p>}
+	<dialog class="tcg-card-modal" id={dialogId} data-inline-card-dialog aria-labelledby={`${dialogId}-title`}>
+		<div class="tcg-card-modal__shell">
+			<div class="tcg-card-modal__bar"><strong id={`${dialogId}-title`} data-inline-modal-title>Detalle de la carta</strong><button type="button" data-inline-card-close aria-label="Cerrar detalle de la carta" title="Cerrar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+			<div class="tcg-card-modal__body"><div class="tcg-card-modal__media" data-inline-modal-media></div><div class="tcg-card-modal__info"><dl><div data-inline-modal-set-row><dt>Colección</dt><dd data-inline-modal-set></dd></div><div data-inline-modal-number-row><dt>Número</dt><dd data-inline-modal-number></dd></div><div data-inline-modal-rarity-row><dt>Rareza</dt><dd data-inline-modal-rarity></dd></div></dl><a data-inline-modal-search href="/decklists">Ver otros decklists con esta carta <span aria-hidden="true">→</span></a></div></div>
+		</div>
+	</dialog>
+</div>
+
+<script>
+	document.addEventListener("click", (event) => {
+		const target = event.target as HTMLElement;
+		const openButton = target.closest<HTMLButtonElement>("[data-inline-card-open]");
+		if (openButton) {
+			const layout = openButton.closest<HTMLElement>("[data-inline-card]");
+			const dialog = layout?.querySelector<HTMLDialogElement>("[data-inline-card-dialog]");
+			if (!dialog) return;
+			const name = openButton.dataset.cardName ?? "Carta";
+			const imageUrl = openButton.dataset.cardImage;
+			const title = dialog.querySelector<HTMLElement>("[data-inline-modal-title]");
+			const media = dialog.querySelector<HTMLElement>("[data-inline-modal-media]");
+			const search = dialog.querySelector<HTMLAnchorElement>("[data-inline-modal-search]");
+			if (title) title.textContent = name;
+			if (media) {
+				media.replaceChildren();
+				if (imageUrl) { const image = document.createElement("img"); image.src = imageUrl; image.alt = name; media.append(image); }
+			}
+			for (const field of ["set", "number", "rarity"] as const) {
+				const value = openButton.dataset[`card${field[0].toUpperCase()}${field.slice(1)}` as "cardSet" | "cardNumber" | "cardRarity"] ?? "";
+				const row = dialog.querySelector<HTMLElement>(`[data-inline-modal-${field}-row]`);
+				const output = dialog.querySelector<HTMLElement>(`[data-inline-modal-${field}]`);
+				if (row) row.hidden = !value;
+				if (output) output.textContent = value;
+			}
+			if (search) search.href = openButton.dataset.cardSearch ?? "/decklists";
+			dialog.showModal();
+			return;
+		}
+		const closeButton = target.closest<HTMLButtonElement>("[data-inline-card-close]");
+		if (closeButton) { closeButton.closest<HTMLDialogElement>("dialog")?.close(); return; }
+		if (target instanceof HTMLDialogElement && target.classList.contains("tcg-card-modal") && target.hasAttribute("data-inline-card-dialog")) target.close();
+	});
+</script>
+
 <style>
-	.pokemon-card-inline { margin: 2rem auto; text-align: center; } .is-small{max-width:180px}.is-medium{max-width:280px}.is-large{max-width:420px} img,.placeholder{display:block;width:100%;aspect-ratio:245/342;border-radius:.8rem;object-fit:cover}.placeholder{display:grid;place-items:center;background:color-mix(in srgb,currentColor 8%,transparent);padding:1rem;box-sizing:border-box}figcaption{margin-top:.6rem;font-size:.75rem;opacity:.65}
+	.pokemon-card-layout { --card-line: color-mix(in srgb, currentColor 16%, transparent); margin: 1.5rem 0; }
+	.pokemon-card-inline { margin: 0; text-align: center; }
+	.align-center .pokemon-card-inline { margin-inline: auto; }
+	.align-right .pokemon-card-inline { margin-left: auto; }
+	.is-small { max-width: 180px; }
+	.is-medium { max-width: 280px; }
+	.is-large { max-width: 420px; }
+	.has-description { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 1.5rem; }
+	.has-description.align-right { grid-template-columns: minmax(0, 1fr) auto; }
+	.has-description.align-right .pokemon-card-inline { grid-column: 2; }
+	.has-description.align-right .card-description { grid-column: 1; grid-row: 1; }
+	.card-description { margin: 0; white-space: pre-line; }
+	.card-open { display: block; width: 100%; padding: 0; border: 0; border-radius: .8rem; color: inherit; background: transparent; cursor: pointer; }
+	.card-open:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+	.card-open img, .placeholder { display: block; width: 100%; aspect-ratio: 245 / 342; border-radius: .8rem; object-fit: cover; }
+	.placeholder { display: grid; place-items: center; background: color-mix(in srgb, currentColor 8%, transparent); padding: 1rem; box-sizing: border-box; }
+	figcaption { margin-top: .6rem; font-size: .75rem; opacity: .65; }
+	/* Same modal chrome as DecklistBlock / PokemonCardGalleryBlock */
+	.tcg-card-modal { width: min(760px, calc(100vw - 2rem)); max-width: none; max-height: calc(100dvh - 2rem); margin: auto; padding: 0; border: 1px solid var(--card-line); border-radius: 1rem; color: inherit; background: var(--color-background, #101010); box-shadow: 0 24px 80px #000b; overflow: hidden; }
+	.tcg-card-modal::backdrop { background: #000b; backdrop-filter: blur(4px); }
+	.tcg-card-modal__shell { display: grid; grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - 2rem); }
+	.tcg-card-modal__bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--card-line); }
+	.tcg-card-modal__bar > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tcg-card-modal__bar button { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; padding: 0; border: 1px solid var(--card-line); border-radius: 999px; color: inherit; background: transparent; cursor: pointer; }
+	.tcg-card-modal__bar svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+	.tcg-card-modal__body { display: grid; grid-template-columns: minmax(220px, .8fr) 1fr; gap: 1.25rem; min-height: 0; overflow-y: auto; padding: 1rem; }
+	.tcg-card-modal__media { min-height: 220px; }
+	.tcg-card-modal__media :global(img) { display: block; width: 100%; max-height: calc(100dvh - 8rem); margin: 0; border-radius: .75rem; object-fit: contain; }
+	.tcg-card-modal__info { align-self: center; }
+	.tcg-card-modal__info dl { margin: 0 0 1.25rem; }
+	.tcg-card-modal__info dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--card-line); }
+	.tcg-card-modal__info dt { opacity: .62; }
+	.tcg-card-modal__info dd { margin: 0; text-align: right; }
+	.tcg-card-modal .tcg-card-modal__info a { display: inline-flex; align-items: center; gap: .5rem; padding: .7rem 1rem; border-radius: 999px; color: var(--color-on-brand, white); background: var(--color-brand, #d72638); font-weight: 700; text-decoration: none; }
+	@media (max-width: 640px) {
+		.has-description { grid-template-columns: 1fr; }
+		.has-description.align-right .pokemon-card-inline,
+		.has-description.align-right .card-description { grid-column: 1; grid-row: auto; }
+		.pokemon-card-inline { margin-inline: auto; }
+		.tcg-card-modal__body { grid-template-columns: 1fr; }
+		.tcg-card-modal__media { min-height: 0; }
+		.tcg-card-modal__media :global(img) { max-height: 55dvh; }
+	}
 </style>

@@ -1,13 +1,14 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
 		id: "pokemon-decklists",
 		version: VERSION,
-		format: "standard",
-		entrypoint: "@tcg-emdash/plugin-pokemon-decklists/sandbox",
+		format: "native",
+		entrypoint: "@tcg-emdash/plugin-pokemon-decklists/native",
+		adminEntry: "@tcg-emdash/plugin-pokemon-decklists/admin",
 		options: {},
 		capabilities: ["network:request"],
 		allowedHosts: ["api.tcgdex.net", "pokeapi.co"],
@@ -48,15 +49,26 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 			type: "pokemonCard",
 			label: "Carta Pokémon",
 			icon: "image",
-			description: "Inserta la imagen de una carta usando nombre, colección y número.",
+			description: "Busca e inserta una carta junto al contenido.",
 			category: "TCG",
 			fields: [
-				{ type: "select", action_id: "cardId", label: "Carta (resultados de la última búsqueda)", options: [], optionsRoute: "card-options" },
-				{ type: "text_input", action_id: "name", label: "Nombre alternativo", placeholder: "Sólo si la carta no está en los resultados recientes" },
-				{ type: "text_input", action_id: "setCode", label: "Colección", placeholder: "JTG" },
-				{ type: "text_input", action_id: "collectorNumber", label: "Número", placeholder: "98" },
+				{ type: "text_input", action_id: "cardId", label: "Carta seleccionada", placeholder: "tcg-card-picker-single" },
 				{ type: "text_input", action_id: "caption", label: "Pie de imagen (opcional)" },
+				{ type: "text_input", action_id: "description", label: "Texto junto a la carta (opcional)", multiline: true },
 				{ type: "select", action_id: "size", label: "Tamaño", options: [{ label: "Pequeña", value: "small" }, { label: "Mediana", value: "medium" }, { label: "Grande", value: "large" }], initial_value: "medium" },
+				{ type: "select", action_id: "alignment", label: "Alineación", options: [{ label: "Izquierda", value: "left" }, { label: "Centro", value: "center" }, { label: "Derecha", value: "right" }], initial_value: "left" },
+			],
+		}, {
+			type: "pokemonCardGallery",
+			label: "Galería de cartas Pokémon",
+			icon: "image",
+			description: "Muestra entre una y cuatro cartas con texto de apoyo.",
+			category: "TCG",
+			fields: [
+				{ type: "text_input", action_id: "cardIds", label: "Cartas seleccionadas", placeholder: "tcg-card-picker-multiple" },
+				{ type: "text_input", action_id: "description", label: "Texto de apoyo (opcional)", multiline: true },
+				{ type: "select", action_id: "columns", label: "Cartas por fila", options: [{ label: "2 cartas", value: "2" }, { label: "3 cartas", value: "3" }, { label: "4 cartas", value: "4" }], initial_value: "4" },
+				{ type: "select", action_id: "textPosition", label: "Posición del texto", options: [{ label: "Debajo", value: "below" }, { label: "A la derecha", value: "right" }], initial_value: "below" },
 			],
 		}],
 	};
