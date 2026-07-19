@@ -8,7 +8,6 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 		version: VERSION,
 		format: "standard",
 		entrypoint: "@tcg-emdash/plugin-pokemon-decklists/sandbox",
-		componentsEntry: "@tcg-emdash/plugin-pokemon-decklists/astro",
 		options: {},
 		capabilities: ["network:request"],
 		allowedHosts: ["api.tcgdex.net", "pokeapi.co"],

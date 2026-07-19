@@ -6,7 +6,8 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./sandbox": "./src/sandbox-entry.ts",
-		"./astro": "./src/astro.ts"
+		"./astro": "./src/astro.ts",
+		"./DecklistBlock.astro": "./src/DecklistBlock.astro"
 	},
 	"files": ["src", "README.md"],
 	"scripts": {
