@@ -1,11 +1,12 @@
 {
 	"name": "@tcg-emdash/plugin-pokemon-decklists",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"description": "Pokémon TCG decklists, archetypes and match results for EmDash",
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./sandbox": "./src/sandbox-entry.ts"
+		"./sandbox": "./src/sandbox-entry.ts",
+		"./astro": "./src/astro.ts"
 	},
 	"files": ["src", "README.md"],
 	"scripts": {

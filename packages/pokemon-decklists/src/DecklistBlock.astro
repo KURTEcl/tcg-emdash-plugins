@@ -1,0 +1,130 @@
+---
+import type { DeckCard, Decklist, MatchResult } from "./domain.js";
+import { serializePokemonDecklist } from "./parser.js";
+
+interface Props {
+	node: { deckId?: string; displayMode?: "images" | "text" | "both"; showResults?: boolean };
+}
+
+const { node } = Astro.props;
+const displayMode = node.displayMode ?? "both";
+let deck: Decklist | null = null;
+let matches: MatchResult[] = [];
+let stats = { total: 0, wins: 0, losses: 0, draws: 0, winRate: 0 };
+
+if (node.deckId) {
+	try {
+		const endpoint = new URL("/_emdash/api/plugins/pokemon-decklists/decks", Astro.url.origin);
+		endpoint.searchParams.set("id", node.deckId);
+		const response = await fetch(endpoint);
+		if (response.ok) {
+			const body = await response.json();
+			deck = body.data ?? body;
+		}
+		if (node.showResults) {
+			const resultsEndpoint = new URL("/_emdash/api/plugins/pokemon-decklists/matches", Astro.url.origin);
+			resultsEndpoint.searchParams.set("deckId", node.deckId);
+			const resultResponse = await fetch(resultsEndpoint);
+			if (resultResponse.ok) {
+				const body = await resultResponse.json();
+				({ items: matches, stats } = body.data ?? body);
+			}
+		}
+	} catch { /* The block renders a helpful empty state below. */ }
+}
+
+const text = deck ? serializePokemonDecklist(deck.cards) : "";
+const groups = deck ? (["pokemon", "trainer", "energy"] as const).map((category) => ({ category, cards: deck!.cards.filter((card) => card.category === category) })).filter((group) => group.cards.length) : [];
+const labels = { pokemon: "Pokémon", trainer: "Entrenadores", energy: "Energías" };
+const copyId = `deck-copy-${deck?.id ?? crypto.randomUUID()}`;
+const sprite = deck?.archetypePokemon?.[0];
+const spriteId = sprite && (sprite.spriteId ?? sprite.speciesId);
+const spriteUrl = spriteId ? `https://cdn.tcghub.cl/sprites/sprites/pokemon/${spriteId}.png` : undefined;
+---
+
+{deck ? (
+	<section class="tcg-deck" data-deck={deck.id}>
+		<header class="tcg-deck__header">
+			<div>
+				<p class="tcg-deck__eyebrow">DECKLIST · {deck.format.toUpperCase()}</p>
+				<h3>{deck.name}</h3>
+				<p>{deck.archetypeName} · {deck.totalCards} cartas</p>
+			</div>
+			{spriteUrl && <img class="tcg-deck__sprite" src={spriteUrl} alt={sprite?.name ?? deck.archetypeName} width="96" height="96" loading="lazy" />}
+		</header>
+
+		{displayMode !== "text" && (
+			<div class="tcg-deck__groups">
+				{groups.map((group) => (
+					<section class="tcg-deck__group">
+						<h4>{labels[group.category]} <span>{group.cards.reduce((sum, card) => sum + card.quantity, 0)}</span></h4>
+						<div class="tcg-deck__cards">
+							{group.cards.map((card: DeckCard) => (
+								<figure class:list={["tcg-card", { "tcg-card--missing": !card.displayPrinting.imageUrl }]}>
+									{card.displayPrinting.imageUrl ? <img src={card.displayPrinting.imageUrl} alt={`${card.displayPrinting.name}, ${card.quantity} copias`} loading="lazy" decoding="async" /> : <div class="tcg-card__placeholder">{card.displayPrinting.name}</div>}
+									<figcaption><strong>{card.quantity}×</strong> {card.displayPrinting.name}</figcaption>
+								</figure>
+							))}
+						</div>
+					</section>
+				))}
+			</div>
+		)}
+
+		{displayMode !== "images" && <pre class="tcg-deck__text" id={copyId}>{text}</pre>}
+		<div class="tcg-deck__actions">
+			<button type="button" data-copy-target={copyId} data-copy-text={text}>Copiar lista</button>
+		</div>
+
+		{node.showResults && stats.total > 0 && (
+			<section class="tcg-results">
+				<div class="tcg-results__summary"><strong>{stats.winRate}%</strong><span>win rate · {stats.total} partidas</span></div>
+				<div class="tcg-results__numbers"><span>{stats.wins} V</span><span>{stats.losses} D</span><span>{stats.draws} E</span></div>
+				<ul>{matches.slice(0, 8).map((match) => <li><span>{match.playedAt}{match.opponentArchetype ? ` · vs ${match.opponentArchetype}` : ""}</span><strong class={`is-${match.result}`}>{match.result === "win" ? "Victoria" : match.result === "loss" ? "Derrota" : "Empate"}</strong></li>)}</ul>
+			</section>
+		)}
+	</section>
+) : (
+	<aside class="tcg-deck tcg-deck--empty">Selecciona un decklist válido o comprueba que siga publicado en el panel.</aside>
+)}
+
+<script>
+	document.addEventListener("click", async (event) => {
+		const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-copy-text]");
+		if (!button) return;
+		await navigator.clipboard.writeText(button.dataset.copyText ?? "");
+		const original = button.textContent;
+		button.textContent = "Lista copiada";
+		setTimeout(() => { button.textContent = original; }, 1800);
+	});
+</script>
+
+<style>
+	.tcg-deck { --deck-line: color-mix(in srgb, currentColor 16%, transparent); margin: 2.5rem 0; border: 1px solid var(--deck-line); border-radius: 1.25rem; overflow: hidden; background: color-mix(in srgb, var(--color-background, #0b0b0b) 94%, currentColor 6%); }
+	.tcg-deck__header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: clamp(1.25rem, 4vw, 2rem); border-bottom: 1px solid var(--deck-line); }
+	.tcg-deck__eyebrow { margin: 0 0 .4rem; font-size: .72rem; letter-spacing: .14em; opacity: .62; }
+	.tcg-deck__header h3 { margin: 0; font-size: clamp(1.5rem, 4vw, 2.2rem); }
+	.tcg-deck__header p:last-child { margin: .45rem 0 0; opacity: .68; }
+	.tcg-deck__sprite { object-fit: contain; image-rendering: auto; flex: 0 0 auto; }
+	.tcg-deck__groups { padding: clamp(1rem, 4vw, 2rem); display: grid; gap: 2rem; }
+	.tcg-deck__group h4 { display: flex; align-items: center; gap: .55rem; margin: 0 0 1rem; font-size: .82rem; letter-spacing: .1em; text-transform: uppercase; }
+	.tcg-deck__group h4 span { opacity: .5; }
+	.tcg-deck__cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: .85rem; }
+	.tcg-card { min-width: 0; margin: 0; }
+	.tcg-card img, .tcg-card__placeholder { display: block; width: 100%; aspect-ratio: 245 / 342; border-radius: .55rem; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
+	.tcg-card__placeholder { padding: .75rem; box-sizing: border-box; display: grid; place-items: center; text-align: center; font-size: .78rem; }
+	.tcg-card figcaption { margin-top: .45rem; font-size: .72rem; line-height: 1.35; opacity: .75; }
+	.tcg-card figcaption strong { opacity: 1; }
+	.tcg-deck__text { margin: 0; padding: clamp(1.25rem, 4vw, 2rem); border-top: 1px solid var(--deck-line); white-space: pre-wrap; overflow-x: auto; font: .82rem/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+	.tcg-deck__actions { padding: 0 clamp(1.25rem, 4vw, 2rem) clamp(1.25rem, 4vw, 2rem); }
+	.tcg-deck__actions button { min-height: 44px; border: 1px solid currentColor; border-radius: 999px; padding: .65rem 1.1rem; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+	.tcg-results { border-top: 1px solid var(--deck-line); padding: clamp(1.25rem, 4vw, 2rem); }
+	.tcg-results__summary { display: flex; align-items: baseline; gap: .6rem; }
+	.tcg-results__summary strong { font-size: 2rem; }
+	.tcg-results__numbers { display: flex; gap: .8rem; margin: .45rem 0 1rem; opacity: .65; }
+	.tcg-results ul { list-style: none; margin: 0; padding: 0; }
+	.tcg-results li { display: flex; justify-content: space-between; gap: 1rem; padding: .65rem 0; border-top: 1px solid var(--deck-line); font-size: .82rem; }
+	.tcg-results .is-win { color: #39a96b; } .tcg-results .is-loss { color: #d85b5b; }
+	.tcg-deck--empty { padding: 1.25rem; }
+	@media (max-width: 600px) { .tcg-deck { margin-inline: -.5rem; border-radius: 1rem; } .tcg-deck__sprite { width: 72px; height: 72px; } .tcg-deck__cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; } .tcg-card figcaption { font-size: .65rem; } }
+</style>

@@ -1,6 +1,6 @@
 import type { PluginDescriptor } from "emdash";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 export function pokemonDecklistsPlugin(): PluginDescriptor {
 	return {
@@ -8,6 +8,7 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 		version: VERSION,
 		format: "standard",
 		entrypoint: "@tcg-emdash/plugin-pokemon-decklists/sandbox",
+		componentsEntry: "@tcg-emdash/plugin-pokemon-decklists/astro",
 		options: {},
 		capabilities: ["network:request"],
 		allowedHosts: ["api.tcgdex.net", "pokeapi.co"],
@@ -19,7 +20,20 @@ export function pokemonDecklistsPlugin(): PluginDescriptor {
 		adminPages: [
 			{ path: "/decks", label: "Decklists Pokémon", icon: "list" },
 			{ path: "/archetypes", label: "Arquetipos Pokémon", icon: "list" },
+			{ path: "/results", label: "Resultados Pokémon", icon: "chart" },
 		],
+		portableTextBlocks: [{
+			type: "pokemonDecklist",
+			label: "Decklist Pokémon",
+			icon: "list",
+			description: "Inserta una lista con cartas, texto para copiar y resultados propios.",
+			category: "TCG",
+			fields: [
+				{ type: "select", action_id: "deckId", label: "Decklist", options: [], optionsRoute: "deck-options" },
+				{ type: "select", action_id: "displayMode", label: "Vista", options: [{ label: "Imágenes y texto", value: "both" }, { label: "Solo imágenes", value: "images" }, { label: "Solo texto", value: "text" }], initial_value: "both" },
+				{ type: "toggle", action_id: "showResults", label: "Mostrar resultados públicos", description: "Incluye estadísticas y partidas recientes de esta lista.", initial_value: true },
+			],
+		}],
 	};
 }
 
